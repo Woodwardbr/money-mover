@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}Debt Tracker — Money Mover{% endblock %}
+{% block content %}
+
+<section class="cards">
+  <div class="card stat-card">
+    <h3>Total Balance</h3>
+    <div id="debt-total-balance" class="stat-value">—</div>
+    <small class="muted" id="debt-num-loans">— loans</small>
+  </div>
+  <div class="card stat-card">
+    <h3>Monthly Minimum</h3>
+    <div id="debt-total-min" class="stat-value">—</div>
+    <small class="muted">sum of minimum payments</small>
+  </div>
+  <div class="card stat-card">
+    <h3>Projected Payoff</h3>
+    <div id="debt-payoff-date" class="stat-value">—</div>
+    <small class="muted" id="debt-payoff-months">at minimums only</small>
+  </div>
+  <div class="card stat-card">
+    <h3>Projected Interest</h3>
+    <div id="debt-projected-interest" class="stat-value">—</div>
+    <small class="muted">over the life of the loans</small>
+  </div>
+</section>
+
+<div class="budget-columns">
+  {# Left column: total loan balance over time (zoom on "now") #}
+  <section class="card">
+    <h3>Balance Over Time</h3>
+    <p class="muted">Total loan balance — reconstructed from payments + current balance. Zooms in on the "now" portion of the payoff timeline.</p>
+    <div class="chart-wrap">
+      <canvas id="debt-balance-chart"></canvas>
+    </div>
+  </section>
+
+  {# Right column: payoff timeline + projection #}
+  <section class="card">
+    <h3>Payoff Timeline</h3>
+    <p class="muted">Actual balance history (solid) vs. projected payoff (dashed).</p>
+    <div class="chart-wrap">
+      <canvas id="debt-chart"></canvas>
+    </div>
+  </section>
+</div>
+
+<section class="card">
+  <div style="display:flex; gap:0.75rem; align-items:flex-end; flex-wrap:wrap;">
+    <label class="muted" style="display:flex; flex-direction:column; gap:0.2rem; font-size:0.85rem;">
+      Extra monthly payment
+      <input type="number" id="debt-extra" placeholder="0.00" step="0.01" min="0"
+             style="background:var(--panel-2); border:1px solid var(--border); color:var(--text); padding:0.4rem 0.6rem; border-radius:6px; width:160px;" />
+    </label>
+    <label class="muted" style="display:flex; flex-direction:column; gap:0.2rem; font-size:0.85rem;">
+      Extra one-time payment
+      <input type="number" id="debt-extra-onetime" placeholder="0.00" step="0.01" min="0"
+             style="background:var(--panel-2); border:1px solid var(--border); color:var(--text); padding:0.4rem 0.6rem; border-radius:6px; width:160px;" />
+    </label>
+    <button id="debt-reproject" class="btn btn-primary">Re-project</button>
+    <small class="muted" id="debt-projection-note" style="margin-left:auto;"></small>
+  </div>
+</section>
+
+<section class="card">
+  <h3>Your Loans</h3>
+  <table class="accounts-table" id="debt-loans-table">
+    <thead>
+      <tr>
+        <th>Loan</th><th>Type</th><th>Rate</th><th class="num">Min/mo</th>
+        <th class="num">Balance</th><th>Due</th><th>Status</th><th>Auto Pay</th><th></th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h3>Recent Payments</h3>
+  <p class="muted">Log payments to track them over time. A combined payment (no loan selected) is logged for history without auto-splitting balances; to reduce a loan's balance, enter the payment against that loan with its new balance.</p>
+
+  <form id="loan-payment-form" class="inline-form" style="flex-direction:column; align-items:stretch; gap:0.4rem; margin-bottom:1rem;">
+    <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+      <select name="loan_id" style="background:var(--panel-2); border:1px solid var(--border); color:var(--text); padding:0.4rem 0.6rem; border-radius:6px; flex:1;">
+        <option value="">Combined (all loans)</option>
+      </select>
+      <input type="date" name="payment_date" required style="background:var(--panel-2); border:1px solid var(--border); color:var(--text); padding:0.4rem 0.6rem; border-radius:6px;" />
+      <input type="number" name="amount" placeholder="Amount $" step="0.01" min="0" required
+             style="background:var(--panel-2); border:1px solid var(--border); color:var(--text); padding:0.4rem 0.6rem; border-radius:6px; width:140px;" />
+    </div>
+    <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+      <input type="text" name="source" placeholder="Source (e.g. Bank Acct *7373)"
+             style="background:var(--panel-2); border:1px solid var(--border); color:var(--text); padding:0.4rem 0.6rem; border-radius:6px; flex:1;" />
+      <select name="status" style="background:var(--panel-2); border:1px solid var(--border); color:var(--text); padding:0.4rem 0.6rem; border-radius:6px;">
+        <option value="Received">Received</option>
+        <option value="Processing">Processing</option>
+        <option value="Failed">Failed</option>
+      </select>
+      <input type="number" name="new_balance" placeholder="New balance (optional)" step="0.01" min="0"
+             style="background:var(--panel-2); border:1px solid var(--border); color:var(--text); padding:0.4rem 0.6rem; border-radius:6px; flex:1;" />
+    </div>
+    <button type="submit" class="btn btn-primary" style="align-self:flex-start;">Log Payment</button>
+  </form>
+
+  <table class="accounts-table" id="debt-payments-table">
+    <thead>
+      <tr><th>Date</th><th class="num">Amount</th><th>Loan</th><th>Status</th><th>Source</th><th></th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h3 id="debt-form-title">Add Loan</h3>
+  <form id="debt-form" class="inline-form" style="flex-direction:column; align-items:stretch; gap:0.4rem;">
+    <input type="hidden" name="loan_id" />
+    <input type="text" name="name" placeholder="Loan name (e.g. 1-01 Direct Loan - Subsidized)" required />
+    <input type="text" name="loan_type" placeholder="Type (e.g. Direct, Direct Grad PLUS)" />
+    <div style="display:flex; gap:0.5rem;">
+      <input type="number" name="interest_rate" placeholder="Rate %" step="0.001" min="0" style="flex:1;" />
+      <input type="number" name="min_payment" placeholder="Min $/mo" step="0.01" min="0" style="flex:1;" />
+    </div>
+    <input type="number" name="current_balance" placeholder="Current balance $" step="0.01" />
+    <input type="date" name="next_due_date" />
+    <div style="display:flex; gap:0.5rem; align-items:center;">
+      <label class="muted" style="font-size:0.85rem; display:flex; gap:0.3rem; align-items:center;">
+        <input type="checkbox" name="auto_pay" /> Auto Pay
+      </label>
+      <select name="status" style="background:var(--panel-2); border:1px solid var(--border); color:var(--text); padding:0.4rem 0.6rem; border-radius:6px; flex:1;">
+        <option value="Scheduled">Scheduled</option>
+        <option value="Paid">Paid</option>
+        <option value="Past Due">Past Due</option>
+      </select>
+    </div>
+    <input type="text" name="notes" placeholder="Notes (optional)" />
+    <div style="display:flex; gap:0.5rem;">
+      <button type="submit" class="btn btn-primary">Save Loan</button>
+      <button type="button" id="debt-form-cancel" class="btn btn-secondary" hidden>Cancel</button>
+    </div>
+  </form>
+</section>
+
+{% endblock %}

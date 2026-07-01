@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="budget-columns">
+  {# ---------------- Left column: allocation overview ---------------- #}
+  <section class="card">
+    <h3>Portfolio Allocation</h3>
+    <p class="muted">Asset breakdown by sector. Cash from depository accounts (e.g. Bank of America); holdings from investment accounts (Robinhood, Fidelity). Click a sector to see the assets in it.</p>
+    <canvas id="portfolio-chart" height="200"></canvas>
+    <table class="accounts-table" id="portfolio-sectors-table">
+      <thead>
+        <tr><th>Sector</th><th class="num">Value</th><th class="num">Assets</th><th></th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
+    <div id="sector-assets-panel" hidden>
+      <h4 id="sector-assets-title">Assets</h4>
+      <table class="accounts-table tx-table">
+        <thead>
+          <tr><th>Ticker</th><th>Name</th><th>Account</th><th class="num">Value</th><th class="num">Qty</th><th></th></tr>
+        </thead>
+        <tbody id="sector-assets-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  {# ---------------- Right column: link / re-link accounts ---------------- #}
+  <section class="card">
+    <h3>Investment Accounts</h3>
+    <p class="muted">To pull holdings (sector breakdown), each investment account must be linked with <strong>Investments</strong> consent. Use the button below to re-link Robinhood or Fidelity — existing items can be removed if duplicated.</p>
+
+    <button id="portfolio-link-btn" class="btn btn-primary">Link / Re-link Account</button>
+
+    <h3 style="margin-top:1.5rem">Linked Items</h3>
+    <table class="accounts-table">
+      <thead><tr><th>Institution</th><th></th></tr></thead>
+      <tbody>
+        {% for it in items %}
+        <tr>
+          <td>{{ it.institution or '—' }}</td>
+          <td><button class="btn btn-sm btn-danger" data-unlink-item="{{ it.item_id }}">Remove</button></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <h3 style="margin-top:1.5rem">401(K) Allocations</h3>
+    <p class="muted">Plaid exposes 401(k) balances but not holdings. Track each fund's allocation % here — values roll into <strong>Portfolio Allocation</strong> by multiplying % × plan balance.</p>
+    <div id="plan-allocations-list"></div>
+
+    <h4 style="margin-top:1rem">Add / Edit Allocation</h4>
+    <form id="plan-allocation-form" class="inline-form">
+      <select name="account_id" required>
+        <option value="">Account</option>
+        {% for a in investment_accounts %}
+        <option value="{{ a.account_id }}">{{ a.institution }} — {{ a.name }}</option>
+        {% endfor %}
+      </select>
+      <input type="text" name="label" placeholder="Fund (e.g. VANG INST TOT STK MK)" required />
+      <input type="text" name="ticker" placeholder="Ticker (e.g. VITSX)" />
+      <input type="number" name="allocation_pct" placeholder="%" step="0.01" min="0" max="100" required />
+      <input type="text" name="sector" placeholder="Sector" required list="sector-options-list" />
+      <button type="submit" class="btn btn-primary">Save</button>
+    </form>
+  </section>
+</div>
+
+<datalist id="sector-options-list"></datalist>
+
+{% endblock %}

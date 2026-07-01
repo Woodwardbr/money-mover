@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}Money Mover{% endblock %}</title>
+  <link rel="stylesheet" href="/static/styles.css?v=5" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Money Mover</div>
+    <nav>
+      <a href="/">Dashboard</a>
+      <a href="/budgets">Budgets</a>
+      <a href="/portfolio">Portfolio</a>
+      <a href="/debt">Debt Tracker</a>
+    </nav>
+    <div class="actions">
+      <span class="env-badge">env: {{ plaid_env }}</span>
+      <button id="sync-btn" class="btn btn-secondary">Sync</button>
+      <button id="link-btn" class="btn btn-primary">Link Account</button>
+    </div>
+  </header>
+
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+
+  <script src="/static/app.js?v=17"></script>
+</body>
+</html>

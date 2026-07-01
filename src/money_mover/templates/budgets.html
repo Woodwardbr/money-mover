@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="budget-columns">
+  {# ---------------- Left column: current spend ---------------- #}
+  <section class="card">
+    <h3>This Month's Spending</h3>
+    <p class="muted">Auto-detected from your transactions. Click a row to see the transactions that make up that category.</p>
+    <canvas id="spending-categories-chart" height="200"></canvas>
+    <table class="accounts-table" id="spending-categories-table">
+      <thead>
+        <tr><th>Category</th><th class="num">Spent</th><th class="num">Txns</th><th></th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
+    <div id="category-transactions-panel" hidden>
+      <h4 id="category-transactions-title">Transactions</h4>
+      <table class="accounts-table tx-table">
+        <thead>
+          <tr><th>Date</th><th>Name</th><th>Account</th><th class="num">Amount</th><th></th></tr>
+        </thead>
+        <tbody id="category-transactions-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  {# ---------------- Right column: budget builder ---------------- #}
+  <section class="card">
+    <h3>Budget Builder</h3>
+    <p class="muted">Set a monthly spending limit per category. Click <strong>Set budget</strong> on a spend row to prefill the form.</p>
+
+    <form id="budget-form" class="inline-form">
+      <input type="text" name="category" placeholder="Category (e.g. Groceries)" required />
+      <input type="number" name="monthly_limit" placeholder="Limit $" step="0.01" min="0" required />
+      <button type="submit" class="btn btn-primary">Save Budget</button>
+    </form>
+
+    <div id="budget-progress-list"></div>
+
+    <h3 style="margin-top:1.5rem">Vendor Rules</h3>
+    <p class="muted">Permanently re-route every transaction from a vendor into a category. Applied at query time, so changes are retroactive.</p>
+    <form id="merchant-rule-form" class="inline-form">
+      <input type="text" name="merchant_pattern" placeholder="Vendor (e.g. costco)" required />
+      <input type="text" name="target_category" placeholder="Category (e.g. Groceries)" required list="category-options-list" />
+      <button type="submit" class="btn btn-primary">Add Rule</button>
+    </form>
+    <div id="merchant-rules-list"></div>
+
+    <h3 style="margin-top:1.5rem">Subscription Detection</h3>
+    <p class="muted">Recurring charges detected from your transaction history — same merchant, consistent monthly cadence, similar amount.</p>
+    <div id="subscriptions-list"></div>
+  </section>
+</div>
+
+<datalist id="category-options-list"></datalist>
+
+{% endblock %}

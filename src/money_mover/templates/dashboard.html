@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="cards">
+  <div class="card stat-card">
+    <h3>Net Worth</h3>
+    <div id="net-worth-value" class="stat-value">—</div>
+    <small class="muted">assets − liabilities</small>
+  </div>
+  <div class="card stat-card">
+    <h3>Potential Net Worth</h3>
+    <div id="potential-net-worth-value" class="stat-value">—</div>
+    <small class="muted">includes unvested RSUs / excluded accounts</small>
+  </div>
+  <div class="card stat-card">
+    <h3>Assets</h3>
+    <div id="assets-value" class="stat-value">—</div>
+  </div>
+  <div class="card stat-card">
+    <h3>Liabilities</h3>
+    <div id="liabilities-value" class="stat-value">—</div>
+  </div>
+  <div class="card stat-card">
+    <h3>Spending (this month)</h3>
+    <div id="month-spend-value" class="stat-value">—</div>
+  </div>
+</section>
+
+<section class="grid">
+  <div class="card chart-card">
+    <h3>Net Worth Over Time</h3>
+    <canvas id="net-worth-chart" height="260"></canvas>
+  </div>
+  <div class="card chart-card">
+    <h3>Spending by Category</h3>
+    <canvas id="spending-chart" height="260"></canvas>
+  </div>
+</section>
+
+<section class="grid grid-even">
+  <div class="card chart-card">
+    <h3>Liabilities</h3>
+    <canvas id="liabilities-chart" height="260"></canvas>
+  </div>
+  <div class="card chart-card">
+    <h3>Net Worth</h3>
+    <canvas id="net-worth-trend-chart" height="260"></canvas>
+  </div>
+</section>
+
+<section class="card">
+  <h3>Accounts</h3>
+  {% if accounts %}
+  <table class="accounts-table">
+    <thead>
+      <tr><th>Name</th><th>Type</th><th>Subtype</th><th>Last 4</th><th class="num">Balance</th><th>As of</th></tr>
+    </thead>
+    <tbody>
+    {% for a in accounts %}
+      <tr>
+        <td>{{ a.name }}{% if a.exclude_from_net_worth %} <small class="muted">(excluded from net worth)</small>{% endif %}</td>
+        <td>{{ a.kind }}</td>
+        <td>{{ a.subtype or '—' }}</td>
+        <td>{{ a.mask or '—' }}</td>
+        <td class="num {{ 'negative' if (a.kind in ('credit','loan') and (a.current or 0) > 0) else '' }}">
+          {{ '$%.2f'|format((a.current or 0) | abs) }}
+        </td>
+        <td>{{ a.snapshot_date or '—' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="muted">No accounts linked yet. Click <strong>Link Account</strong> to connect a credit card, brokerage, or loan via Plaid.</p>
+  {% endif %}
+</section>
+
+{% endblock %}
