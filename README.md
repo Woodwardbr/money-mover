@@ -52,5 +52,8 @@ src/money_mover/
 ## Notes
 
 - All data is stored locally in `data/money-mover.db` (gitignored).
+- Plaid access tokens are stored unencrypted in `data/money-mover.db`. Anyone with read
+  access to that file can pull your account data from Plaid. Keep it off shared drives
+  and out of backups you don't control.
 - In sandbox mode use Plaid's [test credentials](https://plaid.com/docs/sandbox/test-credentials/).
 - This is a personal local app — do not expose it to the public internet as-is.

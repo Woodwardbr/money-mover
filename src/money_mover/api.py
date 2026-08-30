@@ -127,10 +127,10 @@ def net_worth() -> list[dict]:
 
 
 @router.get("/api/spending")
-def spending(start: str | None = None, end: str | None = None) -> list[dict]:
+def spending(start: date | None = None, end: date | None = None) -> list[dict]:
     today = date.today()
-    start_d = date.fromisoformat(start) if start else today.replace(day=1)
-    end_d = date.fromisoformat(end) if end else today
+    start_d = start or today.replace(day=1)
+    end_d = end or today
     return [
         {"category": c.category, "total": c.total, "count": c.transaction_count}
         for c in analytics.spending_by_category(start_d, end_d)
@@ -358,7 +358,7 @@ class LoanReq(BaseModel):
     interest_rate: float | None = None
     min_payment: float | None = None
     current_balance: float | None = None
-    next_due_date: str | None = None
+    next_due_date: date | None = None
     auto_pay: bool = False
     status: str = "Scheduled"
     notes: str | None = None
@@ -366,7 +366,7 @@ class LoanReq(BaseModel):
 
 class LoanPaymentReq(BaseModel):
     loan_id: str | None = None
-    payment_date: str
+    payment_date: date
     amount: float
     status: str = "Received"
     source: str | None = None
@@ -395,7 +395,6 @@ def loans() -> list[dict]:
 
 @router.post("/api/loans")
 def save_loan(req: LoanReq) -> dict:
-    due = date.fromisoformat(req.next_due_date) if req.next_due_date else None
     loan_id = analytics.upsert_loan(
         loan_id=req.loan_id,
         name=req.name,
@@ -403,7 +402,7 @@ def save_loan(req: LoanReq) -> dict:
         interest_rate=req.interest_rate,
         min_payment=req.min_payment,
         current_balance=req.current_balance,
-        next_due_date=due,
+        next_due_date=req.next_due_date,
         auto_pay=req.auto_pay,
         status=req.status,
         notes=req.notes,
@@ -435,9 +434,8 @@ def loan_payments() -> list[dict]:
 
 @router.post("/api/loan-payments")
 def save_loan_payment(req: LoanPaymentReq) -> dict:
-    pdate = date.fromisoformat(req.payment_date)
     payment_id = analytics.record_loan_payment(
-        payment_date=pdate,
+        payment_date=req.payment_date,
         amount=req.amount,
         loan_id=req.loan_id,
         status=req.status,
