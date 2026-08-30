@@ -74,6 +74,12 @@ class SecurityInfo:
 
 
 @dataclass(frozen=True)
+class LinkedItem:
+    item_id: str
+    access_token: str
+
+
+@dataclass(frozen=True)
 class HoldingSnapshot:
     account_id: str
     security_id: str | None
@@ -155,12 +161,15 @@ def _client() -> plaid_api.PlaidApi:
     return plaid_api.PlaidApi(api_client)
 
 
-def exchange_public_token(public_token: str) -> str:
-    """Exchange a Link public token for a reusable access token."""
+def exchange_public_token(public_token: str) -> LinkedItem:
+    """Exchange a Link public token for the item's id and reusable access token."""
     client = _client()
     request = ItemPublicTokenExchangeRequest(public_token=public_token)
     response = client.item_public_token_exchange(request)
-    return response["access_token"]
+    return LinkedItem(
+        item_id=response["item_id"],
+        access_token=response["access_token"],
+    )
 
 
 def get_accounts(access_token: str) -> list[AccountSnapshot]:

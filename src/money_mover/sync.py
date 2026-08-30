@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import secrets
 from datetime import date
 
 from . import plaid
@@ -9,15 +8,19 @@ from .db import CASH_SECURITY_ID, get_conn
 
 def link_item(public_token: str, institution: str | None = None) -> str:
     """Exchange a public token from Plaid Link and persist the item."""
-    access_token = plaid.exchange_public_token(public_token)
-    item_id = secrets.token_hex(8)
+    linked = plaid.exchange_public_token(public_token)
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO items (item_id, access_token, institution) VALUES (?, ?, ?)",
-            (item_id, access_token, institution),
+            """
+            INSERT INTO items (item_id, access_token, institution) VALUES (?, ?, ?)
+            ON CONFLICT(item_id) DO UPDATE SET
+                access_token=excluded.access_token,
+                institution=COALESCE(excluded.institution, items.institution)
+            """,
+            (linked.item_id, linked.access_token, institution),
         )
-    sync_item(item_id)
-    return item_id
+    sync_item(linked.item_id)
+    return linked.item_id
 
 
 def sync_all() -> dict[str, int]:
@@ -56,7 +59,8 @@ def sync_item(item_id: str, access_token: str | None = None) -> dict[str, int]:
                 ON CONFLICT(account_id) DO UPDATE SET
                     name=excluded.name, mask=excluded.mask,
                     kind=excluded.kind, subtype=excluded.subtype,
-                    iso_currency=excluded.iso_currency
+                    iso_currency=excluded.iso_currency,
+                    item_id=excluded.item_id
                 """,
                 (
                     acct.account_id, item_id, acct.name, acct.mask,
