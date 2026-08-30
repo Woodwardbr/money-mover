@@ -5,6 +5,7 @@ SDK's request/response shapes. All calls return plain dicts/dataclasses.
 """
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -12,10 +13,14 @@ from typing import Any
 import plaid
 from plaid.api import plaid_api
 from plaid.model.accounts_get_request import AccountsGetRequest
+from plaid.model.country_code import CountryCode
 from plaid.model.investments_holdings_get_request import InvestmentsHoldingsGetRequest
 from plaid.model.item_public_token_exchange_request import (
     ItemPublicTokenExchangeRequest,
 )
+from plaid.model.link_token_create_request import LinkTokenCreateRequest
+from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
+from plaid.model.products import Products
 from plaid.model.transactions_sync_request import TransactionsSyncRequest
 
 from .config import settings
@@ -144,12 +149,9 @@ def _env_to_plaid_environment(env: str) -> str:
     return mapping.get(env, plaid.Environment.Sandbox)
 
 
-def _client() -> plaid_api.PlaidApi:
-    if not settings.plaid_client_id or not settings.plaid_secret:
-        raise RuntimeError(
-            "Plaid credentials missing. Copy .env.example to .env and fill in "
-            "PLAID_CLIENT_ID / PLAID_SECRET."
-        )
+@functools.lru_cache(maxsize=1)
+def _build_client() -> plaid_api.PlaidApi:
+    """Build a PlaidApi client (cached across calls)."""
     configuration = plaid.Configuration(
         host=_env_to_plaid_environment(settings.plaid_env_value),
         api_key={
@@ -161,6 +163,15 @@ def _client() -> plaid_api.PlaidApi:
     return plaid_api.PlaidApi(api_client)
 
 
+def _client() -> plaid_api.PlaidApi:
+    if not settings.plaid_client_id or not settings.plaid_secret:
+        raise RuntimeError(
+            "Plaid credentials missing. Copy .env.example to .env and fill in "
+            "PLAID_CLIENT_ID / PLAID_SECRET."
+        )
+    return _build_client()
+
+
 def exchange_public_token(public_token: str) -> LinkedItem:
     """Exchange a Link public token for the item's id and reusable access token."""
     client = _client()
@@ -170,6 +181,20 @@ def exchange_public_token(public_token: str) -> LinkedItem:
         item_id=response["item_id"],
         access_token=response["access_token"],
     )
+
+
+def create_link_token() -> str:
+    """Create a Plaid Link token for the browser Link flow."""
+    client = _client()
+    request = LinkTokenCreateRequest(
+        user=LinkTokenCreateRequestUser(client_user_id="money-mover-user"),
+        client_name="Money Mover",
+        products=[Products("transactions"), Products("investments")],
+        country_codes=[CountryCode("US")],
+        language="en",
+    )
+    response = client.link_token_create(request)
+    return response["link_token"]
 
 
 def get_accounts(access_token: str) -> list[AccountSnapshot]:

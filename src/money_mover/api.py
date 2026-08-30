@@ -4,18 +4,12 @@ import dataclasses
 import re
 from datetime import date
 
-import plaid
 from fastapi import APIRouter, HTTPException, Query
-from plaid.api import plaid_api
-from plaid.model.country_code import CountryCode
-from plaid.model.link_token_create_request import LinkTokenCreateRequest
-from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
-from plaid.model.products import Products
 from pydantic import BaseModel
 
 from . import analytics, sync
 from .config import settings
-from .plaid import _env_to_plaid_environment
+from .plaid import create_link_token as create_plaid_link_token
 
 router = APIRouter()
 
@@ -87,25 +81,7 @@ def create_link_token() -> LinkTokenResp:
                 "fill in PLAID_CLIENT_ID / PLAID_SECRET."
             ),
         )
-
-    configuration = plaid.Configuration(
-        host=_env_to_plaid_environment(settings.plaid_env_value),
-        api_key={
-            "clientId": settings.plaid_client_id,
-            "secret": settings.plaid_secret,
-        },
-    )
-    api_client = plaid.ApiClient(configuration)
-    client = plaid_api.PlaidApi(api_client)
-    request = LinkTokenCreateRequest(
-        user=LinkTokenCreateRequestUser(client_user_id="money-mover-user"),
-        client_name="Money Mover",
-        products=[Products("transactions"), Products("investments")],
-        country_codes=[CountryCode("US")],
-        language="en",
-    )
-    response = client.link_token_create(request)
-    return LinkTokenResp(link_token=response["link_token"])
+    return LinkTokenResp(link_token=create_plaid_link_token())
 
 
 @router.post("/api/exchange-public-token")
