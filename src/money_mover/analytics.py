@@ -325,6 +325,8 @@ def spending_months() -> list[dict]:
             y, m = int(ym[:4]), int(ym[5:7])
         except (ValueError, IndexError):
             continue
+        if not 1 <= m <= 12:
+            continue
         out.append({"period": ym, "label": f"{_MONTH_LABELS[m - 1]} {y}"})
     return out
 

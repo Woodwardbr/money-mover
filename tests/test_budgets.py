@@ -43,3 +43,17 @@ def test_budget_progress_no_longer_contains_raw_int_parsing():
     import inspect
     source = inspect.getsource(analytics.budget_progress)
     assert "int(period[:4])" not in source
+
+
+def test_spending_months_skips_invalid_dates(make_account, make_txn):
+    """spending_months() skips date rows with invalid month values."""
+    make_account("a1", kind="depository")
+    make_txn("t1", "a1", "2026-13-01", 42.0, primary="FOOD_AND_DRINK")
+
+    months = analytics.spending_months()
+    # The invalid month should be skipped, not cause an error
+    assert all(
+        m["period"] != "2026-13"
+        for m in months
+        if isinstance(m, dict)
+    )
