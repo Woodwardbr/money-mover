@@ -150,7 +150,10 @@ async function loadPeriodSelect() {
   sel.innerHTML =
     '<option value="avg">Average (all months)</option>' +
     months.map((m) => `<option value="${m.period}">${m.label}</option>`).join("");
-  sel.value = currentPeriod || sel.value || "avg";
+  const now = new Date();
+  const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const hasThisMonth = months.some((m) => m.period === thisMonth);
+  sel.value = currentPeriod || (hasThisMonth ? thisMonth : "avg");
   currentPeriod = sel.value;
   sel.dataset.loaded = "1";
   sel.addEventListener("change", async () => {
@@ -160,18 +163,17 @@ async function loadPeriodSelect() {
 }
 
 function updateBudgetHeading() {
+  const sel = document.getElementById("budget-period-select");
+  const label = sel?.selectedOptions[0]?.textContent || "";
   const heading = document.getElementById("spending-heading");
   const totalLine = document.getElementById("spending-total-line");
+  const isAvg = currentPeriod === "avg";
   if (heading) {
-    heading.textContent = currentPeriod === "avg"
-      ? "Average Monthly Spending"
-      : "This Month's Spending";
+    heading.textContent = isAvg ? "Average Monthly Spending" : `${label} Spending`;
   }
   if (totalLine) {
     const total = currentSpendingCategories.reduce((s, c) => s + c.total, 0);
-    totalLine.textContent = currentPeriod === "avg"
-      ? `Avg/month: ${fmt(total)}`
-      : `Total: ${fmt(total)}`;
+    totalLine.textContent = isAvg ? `Avg/month: ${fmt(total)}` : `Total: ${fmt(total)}`;
   }
 }
 
