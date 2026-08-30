@@ -50,10 +50,6 @@ EXCLUDED_SPEND_CATEGORIES = frozenset(
     }
 )
 
-_DEPOSITORY_KINDS = {"depository"}
-_TRANSFER_WINDOW_DAYS = 3
-
-
 def net_worth_series() -> list[NetWorthPoint]:
     """Net worth computed from daily balance snapshots across all accounts.
 
@@ -125,9 +121,7 @@ def _spend_rows(conn, start: date, end: date) -> list[dict]:
     """Transactions representing true consumption in [start, end].
 
     Excludes balance-sheet-shift categories (LOAN_PAYMENTS, TRANSFER_OUT, etc.)
-    and drops the depository side of any inter-account transfer pair (same
-    absolute amount, within ±3 days, across a depository + credit/loan pair),
-    keeping the credit/loan side where the actual purchase was recorded.
+    so credit-card payments and ATM withdrawals don't inflate spending totals.
     """
     rows = conn.execute(
         """
@@ -148,38 +142,7 @@ def _spend_rows(conn, start: date, end: date) -> list[dict]:
         not in EXCLUDED_SPEND_CATEGORIES
     ]
 
-    drop_ids = _transfer_duplicates(filtered)
-    return [dict(r) for r in filtered if r["transaction_id"] not in drop_ids]
-
-
-def _transfer_duplicates(rows: list) -> set[str]:
-    """Return transaction_ids to drop as the depository side of a transfer pair."""
-    by_amount: dict[float, list] = defaultdict(list)
-    for r in rows:
-        by_amount[round(abs(r["amount"]), 2)].append(r)
-
-    drop: set[str] = set()
-    for group in by_amount.values():
-        if len(group) < 2:
-            continue
-        for i in range(len(group)):
-            for j in range(i + 1, len(group)):
-                a, b = group[i], group[j]
-                if a["account_id"] == b["account_id"]:
-                    continue
-                try:
-                    da = date.fromisoformat(a["date"])
-                    db = date.fromisoformat(b["date"])
-                except (TypeError, ValueError):
-                    continue
-                if abs((da - db).days) > _TRANSFER_WINDOW_DAYS:
-                    continue
-                ka, kb = a["account_kind"], b["account_kind"]
-                if ka in _DEPOSITORY_KINDS and kb in LIABILITY_KINDS:
-                    drop.add(a["transaction_id"])
-                elif kb in _DEPOSITORY_KINDS and ka in LIABILITY_KINDS:
-                    drop.add(b["transaction_id"])
-    return drop
+    return [dict(r) for r in filtered]
 
 
 def _load_merchant_rules(conn) -> list[tuple[str, str]]:
