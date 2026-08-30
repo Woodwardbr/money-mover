@@ -5,8 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{% block title %}Money Mover{% endblock %}</title>
   <link rel="stylesheet" href="/static/styles.css?v=6" />
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+  <script src="/static/vendor/chart.umd.min.js"></script>
+  <!-- Plaid ships a mutable `stable` URL so SRI is not possible. -->
+  <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js" crossorigin="anonymous"></script>
 </head>
 <body>
   <header class="topbar">
