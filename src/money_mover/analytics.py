@@ -1409,7 +1409,11 @@ def loan_balance_history() -> list[dict]:
             "SELECT payment_date, amount FROM loan_payments ORDER BY payment_date ASC"
         ).fetchall()
 
-    total_paid = sum(float(p["amount"] or 0.0) for p in payments)
+    total_paid = sum(
+        float(p["amount"] or 0.0)
+        for p in payments
+        if p["payment_date"] < anchor_date
+    )
     running = anchor_total + total_paid  # balance before the earliest payment
     points: list[dict] = []
     for p in payments:
