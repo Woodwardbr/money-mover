@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import re
 from datetime import date
 
@@ -37,6 +38,14 @@ def _parse_period(period: str | None) -> str:
         status_code=400,
         detail="period must be 'avg' or 'YYYY-MM'",
     )
+
+
+def _serialize(obj) -> dict:
+    """dataclasses.asdict with dates rendered as ISO strings."""
+    return {
+        k: v.isoformat() if isinstance(v, date) else v
+        for k, v in dataclasses.asdict(obj).items()
+    }
 
 
 class LinkTokenResp(BaseModel):
@@ -188,16 +197,7 @@ def spending_category_transactions(
 @router.get("/api/budgets")
 def budgets(period: str | None = None) -> list[dict]:
     p = _parse_period(period)
-    return [
-        {
-            "category": b.category,
-            "monthly_limit": b.monthly_limit,
-            "spent_so_far": b.spent_so_far,
-            "remaining": b.remaining,
-            "pct_used": b.pct_used,
-        }
-        for b in analytics.budget_progress(p)
-    ]
+    return [_serialize(b) for b in analytics.budget_progress(p)]
 
 
 @router.post("/api/budgets")
@@ -246,17 +246,7 @@ def reclassify_transaction(transaction_id: str, req: TransactionOverrideReq) -> 
 @router.get("/api/subscriptions")
 def subscriptions() -> list[dict]:
     """Detected recurring transactions (subscriptions)."""
-    return [
-        {
-            "label": s.label,
-            "amount": s.amount,
-            "occurrences": s.occurrences,
-            "last_date": s.last_date.isoformat(),
-            "avg_interval_days": s.avg_interval_days,
-            "category": s.category,
-        }
-        for s in analytics.detect_subscriptions()
-    ]
+    return [_serialize(s) for s in analytics.detect_subscriptions()]
 
 
 # --- Portfolio: asset allocation by sector ---------------------------------
@@ -271,14 +261,7 @@ class HoldingSectorOverrideReq(BaseModel):
 @router.get("/api/portfolio")
 def portfolio() -> list[dict]:
     """Asset allocation grouped by sector (cash + investment holdings)."""
-    return [
-        {
-            "sector": s.sector,
-            "total": s.total,
-            "asset_count": s.asset_count,
-        }
-        for s in analytics.portfolio_by_sector()
-    ]
+    return [_serialize(s) for s in analytics.portfolio_by_sector()]
 
 
 @router.get("/api/portfolio/{sector}/assets")
