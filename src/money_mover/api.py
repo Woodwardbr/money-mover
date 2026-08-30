@@ -18,7 +18,7 @@ from .plaid import _env_to_plaid_environment
 
 router = APIRouter()
 
-_PERIOD_RE = re.compile(r"^\d{4}-\d{2}$")
+_PERIOD_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
 def _parse_period(period: str | None) -> str:

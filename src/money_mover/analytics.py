@@ -450,20 +450,14 @@ def budget_progress(period: str) -> list[BudgetProgress]:
                 rows: list = []
                 months = 1
             else:
-                start, end = rng
-                months = _count_complete_months(rng)
-                if months <= 0:
-                    months = 1
-                rows = _spend_rows(conn, start, end)
+                months = max(_count_complete_months(rng), 1)
+                rows = _spend_rows(conn, *rng)
         else:
-            try:
-                y, m = int(period[:4]), int(period[5:7])
-            except (ValueError, IndexError):
+            rng = spending_for_period(period)
+            if rng is None:
                 return []
-            start = date(y, m, 1)
-            end = _month_end(start)
-            rows = _spend_rows(conn, start, end)
             months = 1
+            rows = _spend_rows(conn, *rng)
 
         rules = _load_merchant_rules(conn)
 
