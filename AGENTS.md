@@ -35,7 +35,7 @@ Settings are frozen dataclasses loaded once at startup from `.env`:
 
 See [config.py](src/money_mover/config.py) — the `_env()` helper handles defaults.
 
-### API Integration Pattern (Plaid → LLM)
+### API Integration Pattern
 
 Wrapper modules decouple external APIs:
 - [plaid.py](src/money_mover/plaid.py): SDK normalization via dataclasses (`AccountSnapshot`, `TransactionRow`)
@@ -44,7 +44,10 @@ Wrapper modules decouple external APIs:
 
 **For new integrations (e.g., OpenRouter):** Create `llm.py` following the same pattern — dataclass responses, error handling, resource management.
 
-## OpenRouter Integration: LLM-Based Categorization
+## PROPOSED (not implemented): OpenRouter LLM categorization
+
+> Nothing in this section exists in the codebase today. It is a design sketch,
+> not documentation.
 
 The project is designed to integrate OpenRouter API for improved transaction categorization. Plaid provides initial categories, but keyword fallback and manual correction are the only enrichment today.
 
