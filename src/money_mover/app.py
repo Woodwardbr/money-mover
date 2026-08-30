@@ -31,15 +31,14 @@ def _seed() -> None:
 def dashboard(request: Request) -> HTMLResponse:
     with get_conn() as conn:
         acct_rows = conn.execute(
-            """
+            analytics.LATEST_BALANCES_CTE
+            + """
             SELECT a.name, a.mask, a.kind, a.subtype,
                    a.exclude_from_net_worth,
                    b.current,
                    b.snapshot_date
             FROM accounts a
-            LEFT JOIN balances b ON a.account_id = b.account_id
-            WHERE b.snapshot_date = (SELECT MAX(snapshot_date) FROM balances)
-               OR b.snapshot_date IS NULL
+            LEFT JOIN latest_balances b ON a.account_id = b.account_id
             ORDER BY a.kind, a.name
             """
         ).fetchall()

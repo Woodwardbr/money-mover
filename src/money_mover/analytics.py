@@ -22,6 +22,21 @@ from .models import (
 ASSET_KINDS = {"depository", "investment"}
 LIABILITY_KINDS = {"credit", "loan"}
 
+# Every account's most recent balance row, regardless of whether other accounts
+# were synced more recently. Prepend to a query and select FROM latest_balances
+# in place of `balances`.
+LATEST_BALANCES_CTE = """
+WITH latest_balances AS (
+    SELECT b.*
+    FROM balances b
+    JOIN (
+        SELECT account_id, MAX(snapshot_date) AS snapshot_date
+        FROM balances
+        GROUP BY account_id
+    ) m ON m.account_id = b.account_id AND m.snapshot_date = b.snapshot_date
+)
+"""
+
 # Categories that represent balance-sheet shifts (cash → liability reduction,
 # transfers between own accounts, ATM withdrawals) rather than consumption.
 # Excluded from spending totals to avoid double-counting credit-card payments
@@ -50,32 +65,42 @@ def net_worth_series() -> list[NetWorthPoint]:
     with get_conn() as conn:
         rows = conn.execute(
             """
-            SELECT b.snapshot_date,
-                   SUM(CASE WHEN a.kind IN ('depository','investment')
-                            AND a.exclude_from_net_worth = 0
-                            THEN b.current ELSE 0 END) AS assets,
-                   SUM(CASE WHEN a.kind IN ('credit','loan')
-                            THEN b.current ELSE 0 END) AS liabilities,
-                   SUM(CASE WHEN a.kind IN ('depository','investment')
-                            AND a.exclude_from_net_worth = 1
-                            THEN b.current ELSE 0 END) AS excluded_assets
+            SELECT b.account_id, b.snapshot_date, b.current,
+                   a.kind, a.exclude_from_net_worth
             FROM balances b
             JOIN accounts a USING (account_id)
-            GROUP BY b.snapshot_date
             ORDER BY b.snapshot_date
             """
         ).fetchall()
 
+    # Walk snapshot dates in order, carrying each account's last known balance
+    # forward so a date where only one institution synced doesn't zero out the
+    # others.
+    latest: dict[str, dict] = {}
     points: list[NetWorthPoint] = []
-    for row in rows:
-        d = date.fromisoformat(row["snapshot_date"])
-        assets = float(row["assets"] or 0.0)
-        liabilities = float(row["liabilities"] or 0.0)
-        excluded = float(row["excluded_assets"] or 0.0)
+    for snapshot_date in sorted({r["snapshot_date"] for r in rows}):
+        for r in rows:
+            if r["snapshot_date"] == snapshot_date:
+                latest[r["account_id"]] = {
+                    "current": float(r["current"] or 0.0),
+                    "kind": r["kind"],
+                    "excluded": bool(r["exclude_from_net_worth"]),
+                }
+        assets = sum(
+            v["current"] for v in latest.values()
+            if v["kind"] in ASSET_KINDS and not v["excluded"]
+        )
+        liabilities = sum(
+            v["current"] for v in latest.values() if v["kind"] in LIABILITY_KINDS
+        )
+        excluded = sum(
+            v["current"] for v in latest.values()
+            if v["kind"] in ASSET_KINDS and v["excluded"]
+        )
         net = assets - liabilities
         points.append(
             NetWorthPoint(
-                date=d,
+                date=date.fromisoformat(snapshot_date),
                 assets=assets,
                 liabilities=liabilities,
                 net=net,
@@ -761,15 +786,15 @@ def list_plan_allocations() -> list[dict]:
     """All plan allocations with account/institution context, for the UI."""
     with get_conn() as conn:
         rows = conn.execute(
-            """
+            LATEST_BALANCES_CTE
+            + """
             SELECT pa.account_id, pa.label, pa.ticker, pa.allocation_pct, pa.sector,
                    a.name AS account_name, a.subtype, i.institution,
                    b.current AS balance
             FROM plan_allocations pa
             JOIN accounts a USING (account_id)
             JOIN items i USING (item_id)
-            LEFT JOIN balances b ON b.account_id = a.account_id
-                AND b.snapshot_date = (SELECT MAX(snapshot_date) FROM balances)
+            LEFT JOIN latest_balances b ON b.account_id = a.account_id
             ORDER BY i.institution, a.name, pa.allocation_pct DESC
             """
         ).fetchall()
@@ -814,15 +839,15 @@ def delete_plan_allocation(account_id: str, label: str) -> None:
 def _plan_allocation_rows(conn) -> list[sqlite3.Row]:
     """Plan allocations joined with the account's latest balance, for roll-up."""
     return conn.execute(
-        """
+        LATEST_BALANCES_CTE
+        + """
         SELECT pa.account_id, pa.label, pa.ticker, pa.allocation_pct, pa.sector,
                a.name AS account_name, a.subtype, i.institution,
                b.current AS balance
         FROM plan_allocations pa
         JOIN accounts a USING (account_id)
         JOIN items i USING (item_id)
-        LEFT JOIN balances b ON b.account_id = a.account_id
-            AND b.snapshot_date = (SELECT MAX(snapshot_date) FROM balances)
+        LEFT JOIN latest_balances b ON b.account_id = a.account_id
         """
     ).fetchall()
 
@@ -888,16 +913,16 @@ def portfolio_by_sector() -> list[SectorAllocation]:
         if not snap:
             return []
 
-        # Cash from depository accounts (latest snapshot).
+        # Cash from depository accounts (latest snapshot per account).
         cash_rows = conn.execute(
-            """
+            LATEST_BALANCES_CTE
+            + """
             SELECT a.account_id, b.current
             FROM accounts a
-            JOIN balances b USING (account_id)
-            WHERE a.kind = 'depository' AND b.snapshot_date = ?
+            JOIN latest_balances b USING (account_id)
+            WHERE a.kind = 'depository'
               AND a.exclude_from_net_worth = 0
             """,
-            (snap,),
         ).fetchall()
 
         # Holdings from investment accounts (latest holdings snapshot).
@@ -928,13 +953,13 @@ def portfolio_by_sector() -> list[SectorAllocation]:
         # Excludes 401(k) accounts that have plan_allocations rows, since
         # those are broken down by fund below.
         no_holdings_rows = conn.execute(
-            """
+            LATEST_BALANCES_CTE
+            + """
             SELECT a.account_id, a.name, a.subtype, b.current, i.institution
             FROM accounts a
-            JOIN balances b USING (account_id)
+            JOIN latest_balances b USING (account_id)
             JOIN items i USING (item_id)
             WHERE a.kind = 'investment'
-              AND b.snapshot_date = ?
               AND a.exclude_from_net_worth = 0
               AND a.account_id NOT IN (
                   SELECT DISTINCT account_id FROM holdings
@@ -942,7 +967,6 @@ def portfolio_by_sector() -> list[SectorAllocation]:
               )
               AND a.account_id NOT IN (SELECT DISTINCT account_id FROM plan_allocations)
             """,
-            (snap,),
         ).fetchall()
 
         # Manual 401(k) plan allocations — each fund's % of the plan balance.
@@ -1014,15 +1038,15 @@ def assets_in_sector(sector: str) -> list[AssetDetail]:
 
         if sector == CASH_SECTOR:
             cash_rows = conn.execute(
-                """
+                LATEST_BALANCES_CTE
+                + """
                 SELECT a.account_id, a.name, b.current, i.institution
                 FROM accounts a
-                JOIN balances b USING (account_id)
+                JOIN latest_balances b USING (account_id)
                 JOIN items i USING (item_id)
-                WHERE a.kind = 'depository' AND b.snapshot_date = ?
+                WHERE a.kind = 'depository'
                   AND a.exclude_from_net_worth = 0
                 """,
-                (snap,),
             ).fetchall()
             for r in cash_rows:
                 val = float(r["current"] or 0.0)
@@ -1063,13 +1087,13 @@ def assets_in_sector(sector: str) -> list[AssetDetail]:
         # Investment accounts without holdings (401k, ESPP, etc.)
         # Excludes 401(k) accounts that have plan_allocations (broken down below).
         no_holdings_rows = conn.execute(
-            """
+            LATEST_BALANCES_CTE
+            + """
             SELECT a.account_id, a.name, a.subtype, b.current, i.institution
             FROM accounts a
-            JOIN balances b USING (account_id)
+            JOIN latest_balances b USING (account_id)
             JOIN items i USING (item_id)
             WHERE a.kind = 'investment'
-              AND b.snapshot_date = ?
               AND a.exclude_from_net_worth = 0
               AND a.account_id NOT IN (
                   SELECT DISTINCT account_id FROM holdings
@@ -1077,7 +1101,6 @@ def assets_in_sector(sector: str) -> list[AssetDetail]:
               )
               AND a.account_id NOT IN (SELECT DISTINCT account_id FROM plan_allocations)
             """,
-            (snap,),
         ).fetchall()
 
         plan_rows = _plan_allocation_rows(conn)
