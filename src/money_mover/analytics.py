@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import calendar
 import sqlite3
+import uuid
 from collections import defaultdict
 from datetime import date, timedelta
 from pathlib import Path
@@ -270,7 +271,7 @@ def _add_months(d: date, n: int) -> date:
     return date(y, m, 1)
 
 
-def _complete_month_range() -> tuple[date, date] | None:
+def _complete_month_range(conn=None) -> tuple[date, date] | None:
     """(start, end) covering all complete months in the data window.
 
     Start is derived from the earliest transaction date in the data; the
@@ -281,8 +282,11 @@ def _complete_month_range() -> tuple[date, date] | None:
     first_incomplete = date(today.year, today.month, 1)
     last_end = first_incomplete - timedelta(days=1)
 
-    with get_conn() as conn:
+    if conn is not None:
         row = conn.execute("SELECT MIN(date) AS d FROM transactions").fetchone()
+    else:
+        with get_conn() as cn:
+            row = cn.execute("SELECT MIN(date) AS d FROM transactions").fetchone()
     if not row or not row["d"]:
         return None
     earliest = date.fromisoformat(row["d"][:10]).replace(day=1)
@@ -401,7 +405,7 @@ def budget_progress(period: str) -> list[BudgetProgress]:
         budgets = conn.execute("SELECT category, monthly_limit FROM budgets").fetchall()
 
         if period == "avg":
-            rng = _complete_month_range()
+            rng = _complete_month_range(conn)
             if rng is None:
                 rows: list = []
                 months = 1
@@ -1168,7 +1172,7 @@ def set_holding_sector_override(
     with get_conn() as conn:
         if security_id is None:
             # Cash positions have no security_id and can't be reclassified.
-            return
+            raise ValueError("Cash positions cannot be reclassified")
         conn.execute(
             """
             UPDATE holdings SET override_sector = ?
@@ -1266,7 +1270,6 @@ def upsert_loan(
 
     Returns the loan_id (newly generated if None was passed).
     """
-    import uuid
 
     with get_conn() as conn:
         is_new = not loan_id
@@ -1354,7 +1357,6 @@ def record_loan_payment(
     """Log a payment. When loan_id + new_balance are provided, also update that
     loan's current_balance and snapshot it. A NULL loan_id means a combined
     payment across all loans (logged for history but not auto-split)."""
-    import uuid
 
     payment_id = uuid.uuid4().hex[:12]
     with get_conn() as conn:

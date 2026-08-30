@@ -1,27 +1,5 @@
 from __future__ import annotations
 
-KEYWORD_RULES: list[tuple[str, tuple[str, ...]]] = [
-    ("Groceries", ("trader joe", "whole foods", "safeway", "kroger", "aldi", "costco", "publix")),
-    (
-        "Dining",
-        ("chipotle", "mcdonald", "starbucks", "doordash", "uber eats", "grubhub", "restaurant"),
-    ),
-    ("Transportation", ("uber", "lyft", "shell", "chevron", "exxon", "metro transit", "parking")),
-    ("Subscriptions", ("netflix", "spotify", "hulu", "disney", "apple", "google storage", "adobe")),
-    ("Utilities", ("comcast", "verizon", "at&t", "duke energy", "pg&e", "water dept")),
-    ("Rent", ("rent", "mortgage")),
-    ("Income", ("payroll", "salary", "direct deposit", "venmo from", "zelle from")),
-]
-
-
-def infer_category(name: str) -> str | None:
-    lowered = name.lower()
-    for category, keywords in KEYWORD_RULES:
-        if any(kw in lowered for kw in keywords):
-            return category
-    return None
-
-
 # Maps Plaid's personal_finance_category (primary, or primary_detailed) to
 # user-facing budget labels. The first matching rule wins; merchant-keyword
 # overrides take precedence over the Plaid-derived label so things like

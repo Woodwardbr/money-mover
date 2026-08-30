@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
@@ -16,15 +17,17 @@ from .db import get_conn
 BASE_DIR = Path(__file__).parent
 TEMPLATES = Jinja2Templates(directory=BASE_DIR / "templates")
 
-app = FastAPI(title="Money Mover")
-app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
-app.include_router(api_router)
 
-
-@app.on_event("startup")
-def _seed() -> None:
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     """Idempotently seed curated 401(k) default allocations at startup."""
     analytics.seed_default_plan_allocations()
+    yield
+
+
+app = FastAPI(title="Money Mover", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+app.include_router(api_router)
 
 
 @app.get("/", response_class=HTMLResponse)

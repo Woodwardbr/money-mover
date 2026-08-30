@@ -308,7 +308,10 @@ def sector_options() -> list[str]:
 
 @router.patch("/api/portfolio/assets/sector")
 def reclassify_holding_sector(req: HoldingSectorOverrideReq) -> dict:
-    analytics.set_holding_sector_override(req.account_id, req.security_id, req.sector)
+    try:
+        analytics.set_holding_sector_override(req.account_id, req.security_id, req.sector)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "saved"}
 
 
