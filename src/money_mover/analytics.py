@@ -6,7 +6,7 @@ from collections import defaultdict
 from datetime import date, timedelta
 
 from . import categorize
-from .db import get_conn
+from .db import CASH_SECURITY_ID, get_conn
 from .models import (
     AssetDetail,
     BudgetProgress,
@@ -817,19 +817,25 @@ def _infer_sector(
     industry: str | None,
     is_cash_equivalent: bool,
     override: str | None,
+    security_id: str | None = None,
 ) -> str:
     """Effective sector for a holding, late-bound at query time.
 
     Priority (highest first):
       1. ``override_sector`` (manual one-off reclassify)
-      2. ETF ticker → curated sector (``ETF_SECTOR_MAP``)
-      3. Security ``type`` signals (cryptocurrency / cash)
-      4. Industry hint (Aerospace & Defense)
-      5. Plaid sector, consolidated via ``PLAID_SECTOR_REMAP``
-      6. 'Uncategorized'
+      2. Cash sentinel rows (no securities join partner)
+      3. ETF ticker → curated sector (``ETF_SECTOR_MAP``)
+      4. Security ``type`` signals (cryptocurrency / cash)
+      5. Industry hint (Aerospace & Defense)
+      6. Plaid sector, consolidated via ``PLAID_SECTOR_REMAP``
+      7. 'Uncategorized'
     """
     if override:
         return override
+
+    # Cash sentinel rows have no securities join partner.
+    if security_id == CASH_SECURITY_ID:
+        return CASH_SECTOR
 
     # ETFs: derive from curated ticker map. Unknown ETFs → "Diversified ETF".
     if security_type == "etf":
@@ -949,6 +955,7 @@ def portfolio_by_sector() -> list[SectorAllocation]:
             industry=r["industry"],
             is_cash_equivalent=bool(r["is_cash_equivalent"]),
             override=r["override_sector"],
+            security_id=r["security_id"],
         )
         totals[sector]["total"] += val
         totals[sector]["n"] += 1
@@ -1073,6 +1080,7 @@ def assets_in_sector(sector: str) -> list[AssetDetail]:
                 industry=r["industry"],
                 is_cash_equivalent=bool(r["is_cash_equivalent"]),
                 override=r["override_sector"],
+                security_id=r["security_id"],
             )
             if eff_sector != sector:
                 continue

@@ -6,6 +6,11 @@ from pathlib import Path
 
 from .config import settings
 
+# Plaid returns NULL security_id for cash positions. SQLite treats NULLs as
+# distinct in PRIMARY KEY comparisons, so ON CONFLICT never fires and cash rows
+# duplicate on every re-sync. Store this sentinel instead.
+CASH_SECURITY_ID = "__cash__"
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS items (
     item_id        TEXT PRIMARY KEY,
@@ -155,6 +160,28 @@ def init_db(path: Path | None = None) -> None:
         item_cols = {r[1] for r in conn.execute("PRAGMA table_info(items)").fetchall()}
         if "cursor" not in item_cols:
             conn.execute("ALTER TABLE items ADD COLUMN cursor TEXT")
+
+        # Collapse pre-sentinel duplicate cash holdings, then adopt the sentinel.
+        conn.execute(
+            """
+            DELETE FROM holdings
+            WHERE security_id IS NULL
+              AND rowid NOT IN (
+                  SELECT MIN(rowid) FROM holdings
+                  WHERE security_id IS NULL
+                  GROUP BY account_id, snapshot_date
+              )
+            """
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO securities (security_id, name, type, is_cash_equivalent) "
+            "VALUES (?, ?, 'cash', 1)",
+            (CASH_SECURITY_ID, "Cash"),
+        )
+        conn.execute(
+            "UPDATE holdings SET security_id = ? WHERE security_id IS NULL",
+            (CASH_SECURITY_ID,),
+        )
 
 
 @contextmanager

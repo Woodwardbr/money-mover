@@ -4,7 +4,7 @@ import secrets
 from datetime import date
 
 from . import plaid
-from .db import get_conn
+from .db import CASH_SECURITY_ID, get_conn
 
 
 def link_item(public_token: str, institution: str | None = None) -> str:
@@ -203,6 +203,7 @@ def sync_holdings(item_id: str, access_token: str, snapshot_date: str) -> int:
             )
 
         for h in holdings:
+            security_id = h.security_id or CASH_SECURITY_ID
             # Carry the user's manual sector override forward from the most
             # recent prior snapshot for this position, so reclassifications
             # survive each new snapshot. We match two ways:
@@ -240,13 +241,13 @@ def sync_holdings(item_id: str, access_token: str, snapshot_date: str) -> int:
                     cost_basis=excluded.cost_basis
                 """,
                 (
-                    h.account_id, h.security_id, h.quantity,
+                    h.account_id, security_id, h.quantity,
                     h.institution_price, h.institution_value, h.cost_basis,
                     snapshot_date,
                     # security_id match:
-                    h.account_id, h.security_id, snapshot_date,
+                    h.account_id, security_id, snapshot_date,
                     # ticker fallback:
-                    h.account_id, h.security_id, snapshot_date,
+                    h.account_id, security_id, snapshot_date,
                 ),
             )
 
