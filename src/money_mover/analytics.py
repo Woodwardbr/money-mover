@@ -1469,7 +1469,8 @@ def project_payoff(
         and ln.min_payment is not None
         and ln.current_balance > 0
     ]
-    unprojectable = [ln.name for ln in loans if ln not in projectable]
+    projectable_ids = {ln.loan_id for ln in projectable}
+    unprojectable = [ln.name for ln in loans if ln.loan_id not in projectable_ids]
 
     if not projectable:
         return {
@@ -1489,7 +1490,7 @@ def project_payoff(
             "monthly_rate": (float(ln.interest_rate or 0.0) / 100.0) / 12.0,
             "min_payment": float(ln.min_payment or 0.0),
             "interest_paid": 0.0,
-            "schedule": [0.0],  # ending balance per month; index 0 = start
+            "schedule": [round(float(ln.current_balance or 0.0), 2)],  # index 0 = start
         }
         for ln in projectable
     ]
@@ -1510,6 +1511,16 @@ def project_payoff(
         "date": today.isoformat(),
         "total_balance": round(sum(s["balance"] for s in state), 2),
     }]
+
+    if total_schedule[0]["total_balance"] < 0.01:
+        return {
+            "schedule": total_schedule,
+            "months_to_payoff": 0,
+            "payoff_date": today.isoformat(),
+            "total_interest": 0.0,
+            "unprojectable": unprojectable,
+        }
+
     months_to_payoff: int | None = None
 
     for m in range(1, max_months + 1):
@@ -1535,8 +1546,8 @@ def project_payoff(
         extra_by_loan: dict[int, float] = {}
         if extra_pool > 0 and active:
             if strategy == "distributed" and total_active > 0:
-                for s in active:
-                    extra_by_loan[id(s)] = extra_pool * (
+                for idx, s in enumerate(active):
+                    extra_by_loan[idx] = extra_pool * (
                         s["balance"] / total_active
                     )
             else:
@@ -1545,7 +1556,7 @@ def project_payoff(
                 # loan's balance + interest is less than its payment) spills
                 # to the next, and so on.
                 remaining_extra = extra_pool
-                for s in active:
+                for idx, s in enumerate(active):
                     if remaining_extra <= 0:
                         break
                     # Cap at what would actually apply (balance + interest
@@ -1554,15 +1565,15 @@ def project_payoff(
                     cap = max(s["balance"] + interest_this_month - s["min_payment"], 0.0)
                     take = min(remaining_extra, cap)
                     if take > 0:
-                        extra_by_loan[id(s)] = extra_by_loan.get(id(s), 0.0) + take
+                        extra_by_loan[idx] = extra_by_loan.get(idx, 0.0) + take
                         remaining_extra -= take
 
         # Step each active loan forward one month.
-        for s in active:
+        for idx, s in enumerate(active):
             interest = s["balance"] * s["monthly_rate"]
             s["interest_paid"] += interest
             payment = min(
-                s["min_payment"] + extra_by_loan.get(id(s), 0.0),
+                s["min_payment"] + extra_by_loan.get(idx, 0.0),
                 s["balance"] + interest,
             )
             principal = payment - interest
@@ -1577,7 +1588,7 @@ def project_payoff(
                     s["schedule"].append(0.0)
 
         total = sum(s["balance"] for s in state)
-        d = today + timedelta(days=30 * m)
+        d = _add_months(today, m)
         total_schedule.append({
             "month_offset": m,
             "date": d.isoformat(),
@@ -1589,7 +1600,7 @@ def project_payoff(
 
     payoff_date = None
     if months_to_payoff is not None:
-        payoff_date = (today + timedelta(days=30 * months_to_payoff)).isoformat()
+        payoff_date = _add_months(today, months_to_payoff).isoformat()
 
     total_interest = round(sum(s["interest_paid"] for s in state), 2)
 
