@@ -35,13 +35,14 @@ def sync_all() -> dict[str, int]:
 
 def sync_item(item_id: str, access_token: str | None = None) -> dict[str, int]:
     with get_conn() as conn:
+        row = conn.execute(
+            "SELECT access_token, cursor FROM items WHERE item_id = ?", (item_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(item_id)
         if access_token is None:
-            row = conn.execute(
-                "SELECT access_token FROM items WHERE item_id = ?", (item_id,)
-            ).fetchone()
-            if row is None:
-                raise KeyError(item_id)
             access_token = row["access_token"]
+        cursor = row["cursor"]
 
     accounts = plaid.get_accounts(access_token)
     today = date.today().isoformat()
@@ -72,9 +73,9 @@ def sync_item(item_id: str, access_token: str | None = None) -> dict[str, int]:
                 (acct.account_id, today, acct.current_balance, acct.available_balance),
             )
 
-    transactions = plaid.get_transactions(access_token)
+    page = plaid.get_transactions(access_token, cursor=cursor)
     with get_conn() as conn:
-        for tx in transactions:
+        for tx in page.rows:
             conn.execute(
                 """
                 INSERT INTO transactions
@@ -93,13 +94,34 @@ def sync_item(item_id: str, access_token: str | None = None) -> dict[str, int]:
                 ),
             )
 
+        # Apply Plaid's removed-transaction deltas. On the very first sync
+        # (cursor was NULL) Plaid reports any stale pending-transaction rows
+        # it now considers deleted; on incremental syncs these are the
+        # deltas since the last persisted cursor. Either way, drop them.
+        if page.removed_ids:
+            # Batch deletes in chunks to stay within SQLite's bound-parameter
+            # limit (999 by default).
+            for i in range(0, len(page.removed_ids), 500):
+                chunk = page.removed_ids[i:i + 500]
+                placeholders = ",".join("?" * len(chunk))
+                conn.execute(
+                    f"DELETE FROM transactions WHERE transaction_id IN ({placeholders})",
+                    chunk,
+                )
+
+        # Persist the cursor so the next sync is incremental.
+        conn.execute(
+            "UPDATE items SET cursor = ? WHERE item_id = ?",
+            (page.next_cursor, item_id),
+        )
+
     # Investment holdings (only returns rows for items with investments consent;
     # raises on items lacking consent, which we treat as "no holdings").
     holdings_count = sync_holdings(item_id, access_token, today)
 
     return {
         "accounts": len(accounts),
-        "transactions": len(transactions),
+        "transactions": len(page.rows),
         "holdings": holdings_count,
     }
 

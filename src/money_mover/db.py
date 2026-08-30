@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS items (
     item_id        TEXT PRIMARY KEY,
     access_token   TEXT NOT NULL,
     institution    TEXT,
+    cursor         TEXT,                       -- Plaid transactions_sync cursor
     created_at     TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -151,6 +152,9 @@ def init_db(path: Path | None = None) -> None:
             conn.execute(
                 "ALTER TABLE securities ADD COLUMN manual_override INTEGER NOT NULL DEFAULT 0"
             )
+        item_cols = {r[1] for r in conn.execute("PRAGMA table_info(items)").fetchall()}
+        if "cursor" not in item_cols:
+            conn.execute("ALTER TABLE items ADD COLUMN cursor TEXT")
 
 
 @contextmanager

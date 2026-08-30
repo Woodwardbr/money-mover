@@ -47,6 +47,21 @@ class TransactionRow:
 
 
 @dataclass(frozen=True)
+class TransactionSyncPage:
+    """One full (paginated) transactions_sync result.
+
+    - ``rows``: added + modified transactions to upsert.
+    - ``removed_ids``: transaction IDs Plaid says no longer exist (deleted
+      pending transactions, etc.) — the caller should DELETE these.
+    - ``next_cursor``: cursor to persist for the next incremental sync.
+    """
+
+    rows: list[TransactionRow]
+    removed_ids: list[str]
+    next_cursor: str
+
+
+@dataclass(frozen=True)
 class SecurityInfo:
     security_id: str
     ticker: str | None
@@ -172,26 +187,43 @@ def get_accounts(access_token: str) -> list[AccountSnapshot]:
     return out
 
 
-def get_transactions(access_token: str) -> list[TransactionRow]:
-    """Pull all transactions via the sync endpoint (handles pagination)."""
+def get_transactions(
+    access_token: str, cursor: str | None = None
+) -> TransactionSyncPage:
+    """Pull transactions via the sync endpoint, paginating to completion.
+
+    ``cursor`` enables incremental syncs: pass the ``next_cursor`` returned by
+    a prior call to fetch only added/modified/removed deltas. Pass ``None`` (or
+    an empty string) for the very first sync, which returns the full history.
+
+    Returns a :class:`TransactionSyncPage` with the upsertable rows (added +
+    modified), the removed transaction IDs Plaid flagged this sync, and the
+    next cursor to persist.
+    """
     client = _client()
-    cursor: str | None = ""
+    cur: str = cursor or ""
     rows: list[TransactionRow] = []
+    removed: list[str] = []
+    next_cursor = cur
     while True:
         request = TransactionsSyncRequest(
             access_token=access_token,
-            cursor=cursor,
+            cursor=cur,
         )
         response = client.transactions_sync(request)
         for tx in response["added"]:
             rows.append(_tx_to_row(tx))
         for tx in response["modified"]:
             rows.append(_tx_to_row(tx))
+        removed.extend(tx["transaction_id"] for tx in response["removed"])
+        next_cursor = response["next_cursor"]
         if response["has_more"]:
-            cursor = response["next_cursor"]
+            cur = next_cursor
         else:
             break
-    return rows
+    return TransactionSyncPage(
+        rows=rows, removed_ids=removed, next_cursor=next_cursor
+    )
 
 
 def _tx_to_row(tx: Any) -> TransactionRow:

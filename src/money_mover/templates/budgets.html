@@ -4,8 +4,14 @@
 <div class="budget-columns">
   {# ---------------- Left column: current spend ---------------- #}
   <section class="card">
-    <h3>This Month's Spending</h3>
+    <div class="period-header">
+      <h3 id="spending-heading">This Month's Spending</h3>
+      <select id="budget-period-select" class="period-select" aria-label="Spending period">
+        <option value="">Loading…</option>
+      </select>
+    </div>
     <p class="muted">Auto-detected from your transactions. Click a row to see the transactions that make up that category.</p>
+    <p id="spending-total-line" class="total-line"></p>
     <canvas id="spending-categories-chart" height="200"></canvas>
     <table class="accounts-table" id="spending-categories-table">
       <thead>

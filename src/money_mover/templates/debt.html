@@ -46,7 +46,7 @@
 </div>
 
 <section class="card">
-  <div style="display:flex; gap:0.75rem; align-items:flex-end; flex-wrap:wrap;">
+  <div class="reproject-row">
     <label class="muted" style="display:flex; flex-direction:column; gap:0.2rem; font-size:0.85rem;">
       Extra monthly payment
       <input type="number" id="debt-extra" placeholder="0.00" step="0.01" min="0"
@@ -56,6 +56,14 @@
       Extra one-time payment
       <input type="number" id="debt-extra-onetime" placeholder="0.00" step="0.01" min="0"
              style="background:var(--panel-2); border:1px solid var(--border); color:var(--text); padding:0.4rem 0.6rem; border-radius:6px; width:160px;" />
+    </label>
+    <label class="muted" style="display:flex; flex-direction:column; gap:0.2rem; font-size:0.85rem;">
+      Strategy
+      <select id="debt-strategy" style="background:var(--panel-2); border:1px solid var(--border); color:var(--text); padding:0.4rem 0.6rem; border-radius:6px;">
+        <option value="distributed">Distributed (proportional)</option>
+        <option value="highest_interest">Avalanche (highest interest)</option>
+        <option value="lowest_balance">Snowball (lowest balance)</option>
+      </select>
     </label>
     <button id="debt-reproject" class="btn btn-primary">Re-project</button>
     <small class="muted" id="debt-projection-note" style="margin-left:auto;"></small>

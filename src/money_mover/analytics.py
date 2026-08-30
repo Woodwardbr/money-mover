@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import calendar
 import sqlite3
 from collections import defaultdict
 from datetime import date, timedelta
@@ -258,12 +259,187 @@ def transactions_for_friendly_category(
     return out
 
 
-def budget_progress(year: int, month: int) -> list[BudgetProgress]:
-    start = date(year, month, 1)
-    end = date(year + (month // 12), (month % 12) + 1, 1) - timedelta(days=1)
+# --- Budget period picker ---------------------------------------------------
+
+# Months at or after this (year, month) are treated as having complete data.
+# Anything in the current calendar month is always excluded from averages.
+COMPLETE_MONTHS_START = (2026, 5)
+
+_MONTH_LABELS = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+]
+
+
+def _month_end(d: date) -> date:
+    """Last calendar day of d's month."""
+    last = calendar.monthrange(d.year, d.month)[1]
+    return date(d.year, d.month, last)
+
+
+def _add_months(d: date, n: int) -> date:
+    y = d.year + (d.month - 1 + n) // 12
+    m = (d.month - 1 + n) % 12 + 1
+    return date(y, m, 1)
+
+
+def _complete_month_range() -> tuple[date, date] | None:
+    """(start, end) covering all complete months in the data window.
+
+    Start = the later of COMPLETE_MONTHS_START's first month or the earliest
+    transaction month; the current calendar month is never complete. Returns
+    None if there are no complete months yet.
+    """
+    today = date.today()
+    first_incomplete = date(today.year, today.month, 1)
+    # The last complete month is the month before the current one.
+    last_end = first_incomplete - timedelta(days=1)
+    if last_end < date(COMPLETE_MONTHS_START[0], COMPLETE_MONTHS_START[1], 1):
+        return None
+
+    with get_conn() as conn:
+        row = conn.execute("SELECT MIN(date) AS d FROM transactions").fetchone()
+    if not row or not row["d"]:
+        earliest = date(COMPLETE_MONTHS_START[0], COMPLETE_MONTHS_START[1], 1)
+    else:
+        earliest = date.fromisoformat(row["d"][:10]).replace(day=1)
+
+    start = max(
+        earliest,
+        date(COMPLETE_MONTHS_START[0], COMPLETE_MONTHS_START[1], 1),
+    )
+    if start > last_end:
+        return None
+    return start, last_end
+
+
+def _count_complete_months(rng: tuple[date, date]) -> int:
+    """Number of calendar months spanned by [start, end] (inclusive)."""
+    start, end = rng
+    return (end.year - start.year) * 12 + (end.month - start.month) + 1
+
+
+def spending_months() -> list[dict]:
+    """Distinct YYYY-MM periods present in the data (descending).
+
+    Returns ``[{"period": "2026-06", "label": "June 2026"}, ...]``. Used to
+    populate the budget period dropdown.
+    """
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT substr(date, 1, 7) AS ym "
+            "FROM transactions ORDER BY ym DESC"
+        ).fetchall()
+    out: list[dict] = []
+    for r in rows:
+        ym = r["ym"]
+        try:
+            y, m = int(ym[:4]), int(ym[5:7])
+        except (ValueError, IndexError):
+            continue
+        out.append({"period": ym, "label": f"{_MONTH_LABELS[m - 1]} {y}"})
+    return out
+
+
+def spending_for_period(period: str) -> tuple[date, date] | None:
+    """(start, end) date range for a period token.
+
+    - ``"avg"``: spans every complete month in the data window (current month
+      excluded).
+    - ``"YYYY-MM"``: that calendar month.
+    Returns None for an unparseable/empty period.
+    """
+    if period == "avg":
+        return _complete_month_range()
+    try:
+        y, m = int(period[:4]), int(period[5:7])
+        start = date(y, m, 1)
+        end = _month_end(start)
+        return start, end
+    except (ValueError, IndexError):
+        return None
+
+
+def average_monthly_spending_by_friendly_category() -> list[CategorySpend]:
+    """Average monthly spend per friendly category across complete months.
+
+    Divides each category's total over the complete-month window by the number
+    of months in that window (including zero-spend months, so a category that
+    only appeared once doesn't get inflated).
+    """
+    rng = _complete_month_range()
+    if rng is None:
+        return []
+    start, end = rng
+    months = _count_complete_months(rng)
+    if months <= 0:
+        return []
+
+    with get_conn() as conn:
+        rows = _spend_rows(conn, start, end)
+        rules = _load_merchant_rules(conn)
+
+    totals: dict[str, dict] = defaultdict(lambda: {"total": 0.0, "n": 0})
+    for r in rows:
+        cat = _row_friendly_category(r, rules)
+        totals[cat]["total"] += float(r["amount"])
+        totals[cat]["n"] += 1
+
+    return [
+        CategorySpend(
+            category=cat,
+            total=agg["total"] / months,
+            transaction_count=agg["n"],
+        )
+        for cat, agg in sorted(totals.items(), key=lambda kv: -kv[1]["total"])
+    ]
+
+
+def transactions_for_period_category(
+    period: str, category: str
+) -> list[TransactionDetail]:
+    """Transactions matching a friendly category for a period token.
+
+    - ``"avg"``: union of matching transactions across all complete months.
+    - ``"YYYY-MM"``: that month's transactions.
+    """
+    rng = spending_for_period(period)
+    if rng is None:
+        return []
+    start, end = rng
+    return transactions_for_friendly_category(start, end, category)
+
+
+def budget_progress(period: str) -> list[BudgetProgress]:
+    """Budget progress for a period token (``"avg"`` or ``"YYYY-MM"``).
+
+    For ``"avg"``, ``spent_so_far`` is the average monthly spend over complete
+    months, compared against the per-month ``monthly_limit``.
+    """
     with get_conn() as conn:
         budgets = conn.execute("SELECT category, monthly_limit FROM budgets").fetchall()
-        rows = _spend_rows(conn, start, end)
+
+        if period == "avg":
+            rng = _complete_month_range()
+            if rng is None:
+                rows: list = []
+                months = 1
+            else:
+                start, end = rng
+                months = _count_complete_months(rng)
+                if months <= 0:
+                    months = 1
+                rows = _spend_rows(conn, start, end)
+        else:
+            try:
+                y, m = int(period[:4]), int(period[5:7])
+            except (ValueError, IndexError):
+                return []
+            start = date(y, m, 1)
+            end = _month_end(start)
+            rows = _spend_rows(conn, start, end)
+            months = 1
+
         rules = _load_merchant_rules(conn)
 
     spent_map: dict[str, float] = defaultdict(float)
@@ -272,7 +448,8 @@ def budget_progress(year: int, month: int) -> list[BudgetProgress]:
 
     out: list[BudgetProgress] = []
     for b in budgets:
-        spent = spent_map.get(b["category"], 0.0)
+        spent_raw = spent_map.get(b["category"], 0.0)
+        spent = spent_raw / months if period == "avg" else spent_raw
         limit = float(b["monthly_limit"])
         out.append(
             BudgetProgress(
@@ -553,13 +730,8 @@ def seed_default_plan_allocations() -> int:
     """Idempotently insert the curated default allocations for any matching
     401(k) accounts that currently have none. Returns the number of rows
     inserted."""
-    import sqlite3
-
-    from .config import settings
     inserted = 0
-    conn = sqlite3.connect(settings.db_path)
-    conn.row_factory = sqlite3.Row
-    try:
+    with get_conn() as conn:
         accts = conn.execute(
             "SELECT account_id, name FROM accounts WHERE kind = 'investment'"
         ).fetchall()
@@ -582,9 +754,6 @@ def seed_default_plan_allocations() -> int:
                         (acct["account_id"], label, ticker, pct, sector),
                     )
                     inserted += 1
-        conn.commit()
-    finally:
-        conn.close()
     return inserted
 
 
@@ -1263,39 +1432,27 @@ def loan_balance_history() -> list[dict]:
     return points
 
 
-def _amortize_loan(
-    balance: float,
-    annual_rate_pct: float,
-    monthly_payment: float,
-    extra: float = 0.0,
+PAYOFF_STRATEGIES = ("distributed", "highest_interest", "lowest_balance")
+
+
+def project_payoff(
+    extra_monthly: float = 0.0,
     extra_onetime: float = 0.0,
-    max_months: int = 600,
-) -> list[tuple[int, float]]:
-    """Return a list of (month_offset, ending_balance) for one loan.
+    strategy: str = "distributed",
+) -> dict:
+    """Forward projection of total loan balance under a payoff strategy.
 
-    `extra` is an additional principal-only payment applied each month.
-    `extra_onetime` is a one-time principal payment applied immediately
-    before the first month's interest accrues (lump sum, e.g. RSU proceeds).
-    Caps at max_months to avoid runaway loops on bad inputs.
-    """
-    monthly_rate = (annual_rate_pct / 100.0) / 12.0
-    # Apply one-time payment upfront (reduces principal before any interest).
-    balance = max(balance - extra_onetime, 0.0)
-    pts: list[tuple[int, float]] = [(0, round(balance, 2))]
-    for m in range(1, max_months + 1):
-        interest = balance * monthly_rate
-        payment = min(monthly_payment + extra, balance + interest)
-        principal = payment - interest
-        balance -= principal
-        if balance < 0.005:
-            pts.append((m, 0.0))
-            break
-        pts.append((m, round(balance, 2)))
-    return pts
+    Strategies:
+      - ``distributed`` (proportional): split the extra payment across
+        projectable loans proportional to each loan's balance share. This is
+        the historical default.
+      - ``highest_interest`` (avalanche): direct the full extra payment at
+        the highest-interest-rate loan each month.
+      - ``lowest_balance`` (snowball): direct the full extra payment at the
+        smallest-balance loan each month.
 
-
-def project_payoff(extra_monthly: float = 0.0, extra_onetime: float = 0.0) -> dict:
-    """Forward projection of total loan balance.
+    When a loan pays off, its minimum payment rolls into the extra-payment
+    pool for the remaining loans (all strategies), accelerating payoff.
 
     Returns a dict with:
       - schedule: list of {month_offset, date, total_balance} points
@@ -1306,8 +1463,12 @@ def project_payoff(extra_monthly: float = 0.0, extra_onetime: float = 0.0) -> di
 
     Loans missing interest_rate, min_payment, or current_balance are skipped
     (reported in `unprojectable`) since we can't amortize them.
-    Extra is split across projectable loans proportional to their balance.
     """
+    if strategy not in PAYOFF_STRATEGIES:
+        raise ValueError(
+            f"unknown strategy {strategy!r}; expected one of {PAYOFF_STRATEGIES}"
+        )
+
     loans = list_loans()
     projectable = [
         ln for ln in loans
@@ -1327,51 +1488,110 @@ def project_payoff(extra_monthly: float = 0.0, extra_onetime: float = 0.0) -> di
             "unprojectable": unprojectable,
         }
 
-    total_balance = sum(ln.current_balance or 0.0 for ln in projectable)
-    # Per-loan amortization with proportional share of the extras.
-    per_loan_schedules = []
-    total_interest = 0.0
-    for ln in projectable:
-        share = (ln.current_balance or 0.0) / total_balance if total_balance else 0.0
-        sched = _amortize_loan(
-            balance=ln.current_balance or 0.0,
-            annual_rate_pct=ln.interest_rate or 0.0,
-            monthly_payment=ln.min_payment or 0.0,
-            extra=extra_monthly * share,
-            extra_onetime=extra_onetime * share,
-        )
-        # Sum interest: each month interest = balance_before * monthly_rate.
-        monthly_rate = (ln.interest_rate or 0.0) / 100.0 / 12.0
-        bal = ln.current_balance or 0.0
-        share_extra = extra_monthly * share
-        for _m, end_bal in sched[1:]:
-            interest = bal * monthly_rate
-            total_interest += interest
-            payment = min((ln.min_payment or 0.0) + share_extra, bal + interest)
-            bal -= payment - interest
-            bal = end_bal
-        per_loan_schedules.append(sched)
+    # Per-loan mutable state for the simulation.
+    state = [
+        {
+            "name": ln.name,
+            "balance": float(ln.current_balance or 0.0),
+            "rate": float(ln.interest_rate or 0.0),
+            "monthly_rate": (float(ln.interest_rate or 0.0) / 100.0) / 12.0,
+            "min_payment": float(ln.min_payment or 0.0),
+            "interest_paid": 0.0,
+            "schedule": [0.0],  # ending balance per month; index 0 = start
+        }
+        for ln in projectable
+    ]
+    # Apply one-time lump payments up front (proportional to balance, matching
+    # the historical "distributed" behaviour for the lump sum across all
+    # strategies — the strategy only governs the recurring extra).
+    total_balance = sum(s["balance"] for s in state)
+    if extra_onetime > 0 and total_balance > 0:
+        for s in state:
+            share = s["balance"] / total_balance
+            s["balance"] = max(s["balance"] - extra_onetime * share, 0.0)
+            s["schedule"][0] = round(s["balance"], 2)
 
-    max_len = max(len(s) for s in per_loan_schedules)
+    max_months = 600
     today = date.today()
-    schedule: list[dict] = []
-    months_to_payoff = None
-    for m in range(max_len):
-        total = 0.0
-        done = True
-        for s in per_loan_schedules:
-            if m < len(s):
-                total += s[m][1]
-                if s[m][1] > 0.005:
-                    done = False
-            # beyond this loan's payoff length contributes 0
+    total_schedule: list[dict] = [{
+        "month_offset": 0,
+        "date": today.isoformat(),
+        "total_balance": round(sum(s["balance"] for s in state), 2),
+    }]
+    months_to_payoff: int | None = None
+
+    for m in range(1, max_months + 1):
+        # Pool of extra payment available this month: the user's extra_monthly
+        # plus the freed-up minimums from any loans paid off in prior months.
+        freed_min = sum(
+            s["min_payment"] for s in state if s["balance"] <= 0.005
+        )
+        extra_pool = extra_monthly + freed_min
+
+        # Order the still-active loans for this month's extra allocation.
+        active = [s for s in state if s["balance"] > 0.005]
+        if strategy == "highest_interest":
+            active.sort(key=lambda s: (-s["rate"], s["balance"]))
+        elif strategy == "lowest_balance":
+            active.sort(key=lambda s: (s["balance"], -s["rate"]))
+        else:  # distributed — order doesn't matter, split is proportional
+            active.sort(key=lambda s: -s["balance"])
+
+        total_active = sum(s["balance"] for s in active)
+
+        # Assign each active loan its slice of the extra payment.
+        extra_by_loan: dict[int, float] = {}
+        if extra_pool > 0 and active:
+            if strategy == "distributed" and total_active > 0:
+                for s in active:
+                    extra_by_loan[id(s)] = extra_pool * (
+                        s["balance"] / total_active
+                    )
+            else:
+                # Avalanche / snowball: stack the whole extra onto the
+                # first loan in the ordering; any remainder (when the top
+                # loan's balance + interest is less than its payment) spills
+                # to the next, and so on.
+                remaining_extra = extra_pool
+                for s in active:
+                    if remaining_extra <= 0:
+                        break
+                    # Cap at what would actually apply (balance + interest
+                    # this month minus the min payment's principal portion).
+                    interest_this_month = s["balance"] * s["monthly_rate"]
+                    cap = max(s["balance"] + interest_this_month - s["min_payment"], 0.0)
+                    take = min(remaining_extra, cap)
+                    if take > 0:
+                        extra_by_loan[id(s)] = extra_by_loan.get(id(s), 0.0) + take
+                        remaining_extra -= take
+
+        # Step each active loan forward one month.
+        for s in active:
+            interest = s["balance"] * s["monthly_rate"]
+            s["interest_paid"] += interest
+            payment = min(
+                s["min_payment"] + extra_by_loan.get(id(s), 0.0),
+                s["balance"] + interest,
+            )
+            principal = payment - interest
+            s["balance"] = max(s["balance"] - principal, 0.0)
+            s["schedule"].append(round(s["balance"], 2))
+
+        # Paid-off loans this month append a 0.0 point so their schedule
+        # length tracks the others.
+        for s in state:
+            if s["balance"] <= 0.005:
+                if len(s["schedule"]) <= m:
+                    s["schedule"].append(0.0)
+
+        total = sum(s["balance"] for s in state)
         d = today + timedelta(days=30 * m)
-        schedule.append({
+        total_schedule.append({
             "month_offset": m,
             "date": d.isoformat(),
             "total_balance": round(total, 2),
         })
-        if done and total < 0.01 and months_to_payoff is None:
+        if total < 0.01 and months_to_payoff is None:
             months_to_payoff = m
             break
 
@@ -1379,11 +1599,13 @@ def project_payoff(extra_monthly: float = 0.0, extra_onetime: float = 0.0) -> di
     if months_to_payoff is not None:
         payoff_date = (today + timedelta(days=30 * months_to_payoff)).isoformat()
 
+    total_interest = round(sum(s["interest_paid"] for s in state), 2)
+
     return {
-        "schedule": schedule,
+        "schedule": total_schedule,
         "months_to_payoff": months_to_payoff,
         "payoff_date": payoff_date,
-        "total_interest": round(total_interest, 2),
+        "total_interest": total_interest,
         "unprojectable": unprojectable,
     }
 

@@ -120,18 +120,59 @@ function palette(n) {
 // --- Budgets page ----------------------------------------------------------
 let spendingCategoriesChart = null;
 let currentSpendingCategories = [];
+let currentPeriod = "";
 
 async function loadBudgets() {
   if (!document.getElementById("spending-categories-chart")) return;
 
+  // Populate the period dropdown once (default = current month).
+  await loadPeriodSelect();
+
   const [progress, categories] = await Promise.all([
-    api("/api/budgets"),
-    api("/api/spending-categories"),
+    api(`/api/budgets${currentPeriod ? `?period=${encodeURIComponent(currentPeriod)}` : ""}`),
+    api(`/api/spending-categories${currentPeriod ? `?period=${encodeURIComponent(currentPeriod)}` : ""}`),
   ]);
   currentSpendingCategories = categories;
 
+  updateBudgetHeading();
   renderSpendingCategories(categories);
   renderBudgetProgress(progress);
+}
+
+async function loadPeriodSelect() {
+  const sel = document.getElementById("budget-period-select");
+  if (!sel) return;
+  if (sel.dataset.loaded === "1") {
+    sel.value = currentPeriod || sel.value;
+    return;
+  }
+  const months = await api("/api/spending-months");
+  sel.innerHTML =
+    '<option value="avg">Average (all months)</option>' +
+    months.map((m) => `<option value="${m.period}">${m.label}</option>`).join("");
+  sel.value = currentPeriod || sel.value || "avg";
+  currentPeriod = sel.value;
+  sel.dataset.loaded = "1";
+  sel.addEventListener("change", async () => {
+    currentPeriod = sel.value;
+    await loadBudgets();
+  });
+}
+
+function updateBudgetHeading() {
+  const heading = document.getElementById("spending-heading");
+  const totalLine = document.getElementById("spending-total-line");
+  if (heading) {
+    heading.textContent = currentPeriod === "avg"
+      ? "Average Monthly Spending"
+      : "This Month's Spending";
+  }
+  if (totalLine) {
+    const total = currentSpendingCategories.reduce((s, c) => s + c.total, 0);
+    totalLine.textContent = currentPeriod === "avg"
+      ? `Avg/month: ${fmt(total)}`
+      : `Total: ${fmt(total)}`;
+  }
 }
 
 function renderSpendingCategories(categories) {
@@ -200,10 +241,11 @@ async function loadCategoryTransactions(category) {
 
   try {
     const txns = await api(
-      `/api/spending-categories/${encodeURIComponent(category)}/transactions`
+      `/api/spending-categories/${encodeURIComponent(category)}/transactions` +
+        (currentPeriod ? `?period=${encodeURIComponent(currentPeriod)}` : "")
     );
     if (!txns.length) {
-      body.innerHTML = '<tr><td colspan="5" class="muted">No transactions this month.</td></tr>';
+      body.innerHTML = '<tr><td colspan="5" class="muted">No transactions in this period.</td></tr>';
       return;
     }
     body.innerHTML = txns
@@ -811,14 +853,15 @@ async function loadDebtBalanceChart() {
   });
 }
 
-async function loadDebtChart(extraMonthly, extraOnetime) {
+async function loadDebtChart(extraMonthly, extraOnetime, strategy) {
   const canvas = document.getElementById("debt-chart");
   if (!canvas) return;
   const [history, projection] = await Promise.all([
     api("/api/debt/balance-history"),
     api(
       `/api/debt/projection?extra_monthly=${encodeURIComponent(extraMonthly || 0)}` +
-        `&extra_onetime=${encodeURIComponent(extraOnetime || 0)}`
+        `&extra_onetime=${encodeURIComponent(extraOnetime || 0)}` +
+        `&strategy=${encodeURIComponent(strategy || "distributed")}`
     ),
   ]);
 
@@ -928,10 +971,11 @@ async function loadDebtChart(extraMonthly, extraOnetime) {
 async function loadDebt() {
   if (!document.getElementById("debt-chart")) return;
   await loadLoans();
+  const strategy = document.getElementById("debt-strategy")?.value || "distributed";
   await Promise.all([
     loadDebtSummary(),
     loadLoanPayments(),
-    loadDebtChart(0),
+    loadDebtChart(0, 0, strategy),
     loadDebtBalanceChart(),
   ]);
 }
@@ -1035,7 +1079,8 @@ document.getElementById("debt-reproject")?.addEventListener("click", async () =>
   const onetime = parseFloat(
     document.getElementById("debt-extra-onetime")?.value || "0"
   );
-  await loadDebtChart(extra, onetime);
+  const strategy = document.getElementById("debt-strategy")?.value || "distributed";
+  await loadDebtChart(extra, onetime, strategy);
 });
 
 loadDebt();

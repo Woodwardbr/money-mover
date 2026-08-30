@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import re
 from datetime import date
 
 import plaid
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from plaid.api import plaid_api
 from plaid.model.country_code import CountryCode
 from plaid.model.link_token_create_request import LinkTokenCreateRequest
@@ -16,6 +17,26 @@ from .config import settings
 from .plaid import _env_to_plaid_environment
 
 router = APIRouter()
+
+_PERIOD_RE = re.compile(r"^\d{4}-\d{2}$")
+
+
+def _parse_period(period: str | None) -> str:
+    """Validate a period query param. Defaults to the current YYYY-MM.
+
+    Accepts ``"avg"`` or a ``YYYY-MM`` string; anything else raises 400.
+    """
+    if period is None or period == "":
+        today = date.today()
+        return f"{today.year:04d}-{today.month:02d}"
+    if period == "avg":
+        return period
+    if _PERIOD_RE.match(period):
+        return period
+    raise HTTPException(
+        status_code=400,
+        detail="period must be 'avg' or 'YYYY-MM'",
+    )
 
 
 class LinkTokenResp(BaseModel):
@@ -117,25 +138,39 @@ def spending(start: str | None = None, end: str | None = None) -> list[dict]:
 
 
 @router.get("/api/spending-categories")
-def spending_categories(start: str | None = None, end: str | None = None) -> list[dict]:
-    """Friendly-category spending breakdown for the budgets page."""
-    today = date.today()
-    start_d = date.fromisoformat(start) if start else today.replace(day=1)
-    end_d = date.fromisoformat(end) if end else today
+def spending_categories(period: str | None = None) -> list[dict]:
+    """Friendly-category spending breakdown for a period token.
+
+    ``period`` is ``"avg"`` (average monthly spend over complete months) or a
+    ``YYYY-MM`` string. Defaults to the current month.
+    """
+    p = _parse_period(period)
+    if p == "avg":
+        cats = analytics.average_monthly_spending_by_friendly_category()
+    else:
+        rng = analytics.spending_for_period(p)
+        if rng is None:
+            return []
+        start, end = rng
+        cats = analytics.spending_by_friendly_category(start, end)
     return [
         {"category": c.category, "total": c.total, "count": c.transaction_count}
-        for c in analytics.spending_by_friendly_category(start_d, end_d)
+        for c in cats
     ]
+
+
+@router.get("/api/spending-months")
+def spending_months() -> list[dict]:
+    """Distinct YYYY-MM periods present in the data (descending)."""
+    return analytics.spending_months()
 
 
 @router.get("/api/spending-categories/{category}/transactions")
 def spending_category_transactions(
-    category: str, start: str | None = None, end: str | None = None
+    category: str, period: str | None = None
 ) -> list[dict]:
-    """Individual transactions for a friendly category in [start, end]."""
-    today = date.today()
-    start_d = date.fromisoformat(start) if start else today.replace(day=1)
-    end_d = date.fromisoformat(end) if end else today
+    """Individual transactions for a friendly category in a period."""
+    p = _parse_period(period)
     return [
         {
             "transaction_id": t.transaction_id,
@@ -146,15 +181,13 @@ def spending_category_transactions(
             "category_detailed": t.category_detailed,
             "account_name": t.account_name,
         }
-        for t in analytics.transactions_for_friendly_category(start_d, end_d, category)
+        for t in analytics.transactions_for_period_category(p, category)
     ]
 
 
 @router.get("/api/budgets")
-def budgets(year: int | None = None, month: int | None = None) -> list[dict]:
-    today = date.today()
-    y = year or today.year
-    m = month or today.month
+def budgets(period: str | None = None) -> list[dict]:
+    p = _parse_period(period)
     return [
         {
             "category": b.category,
@@ -163,7 +196,7 @@ def budgets(year: int | None = None, month: int | None = None) -> list[dict]:
             "remaining": b.remaining,
             "pct_used": b.pct_used,
         }
-        for b in analytics.budget_progress(y, m)
+        for b in analytics.budget_progress(p)
     ]
 
 
@@ -433,8 +466,20 @@ def debt_balance_history() -> list[dict]:
 
 @router.get("/api/debt/projection")
 def debt_projection(
-    extra_monthly: float = 0.0, extra_onetime: float = 0.0
+    extra_monthly: float = 0.0,
+    extra_onetime: float = 0.0,
+    strategy: str = Query(
+        "distributed",
+        description="Payoff strategy: distributed, highest_interest, or lowest_balance",
+    ),
 ) -> dict:
+    if strategy not in analytics.PAYOFF_STRATEGIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"strategy must be one of {analytics.PAYOFF_STRATEGIES}",
+        )
     return analytics.project_payoff(
-        extra_monthly=extra_monthly, extra_onetime=extra_onetime
+        extra_monthly=extra_monthly,
+        extra_onetime=extra_onetime,
+        strategy=strategy,
     )
