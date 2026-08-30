@@ -1,6 +1,11 @@
 const fmt = (n) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n || 0);
 
+function escapeHtml(s) {
+  return String(s || "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
 async function api(path, opts) {
   const res = await fetch(path, opts);
   if (!res.ok) {
@@ -253,10 +258,10 @@ async function loadCategoryTransactions(category) {
     body.innerHTML = txns
       .map(
         (t) => `
-        <tr data-txn-id="${t.transaction_id}" data-merchant="${(t.merchant || t.name).replace(/"/g, "&quot;")}">
+        <tr data-txn-id="${t.transaction_id}" data-merchant="${escapeHtml(t.merchant || t.name)}">
           <td>${t.date}</td>
-          <td>${t.merchant || t.name}</td>
-          <td class="muted">${t.account_name || ""}</td>
+          <td>${escapeHtml(t.merchant || t.name)}</td>
+          <td class="muted">${escapeHtml(t.account_name || "")}</td>
           <td class="num">${fmt(t.amount)}</td>
           <td><button class="btn btn-sm reclassify-btn">Reclassify</button></td>
         </tr>`
@@ -287,7 +292,7 @@ async function toggleReclassifyRow(tr, currentCategory) {
   const merchant = tr.dataset.merchant;
   const options = await loadCategoryOptions();
   const optHTML = options
-    .map((o) => `<option value="${o}" ${o === currentCategory ? "selected" : ""}>${o}</option>`)
+    .map((o) => `<option value="${escapeHtml(o)}" ${o === currentCategory ? "selected" : ""}>${escapeHtml(o)}</option>`)
     .join("");
 
   const newRow = document.createElement("tr");
@@ -297,7 +302,7 @@ async function toggleReclassifyRow(tr, currentCategory) {
       <div class="reclassify-form">
         <select class="reclassify-select">${optHTML}</select>
         <button class="btn btn-sm" data-action="txn">Just this transaction</button>
-        <button class="btn btn-sm" data-action="vendor">All from "${merchant}"</button>
+        <button class="btn btn-sm" data-action="vendor">All from "${escapeHtml(merchant)}"</button>
         <button class="btn btn-sm btn-secondary" data-action="cancel">Cancel</button>
       </div>
     </td>`;
@@ -337,7 +342,7 @@ async function loadCategoryOptions() {
   _categoryOptionsCache = await api("/api/category-options");
   // Populate datalist for the vendor-rule form too
   const dl = document.getElementById("category-options-list");
-  if (dl) dl.innerHTML = _categoryOptionsCache.map((o) => `<option value="${o}">`).join("");
+  if (dl) dl.innerHTML = _categoryOptionsCache.map((o) => `<option value="${escapeHtml(o)}">`).join("");
   return _categoryOptionsCache;
 }
 
@@ -654,7 +659,7 @@ async function loadPlanAllocations() {
 
   // Populate the sector datalist.
   const dl = document.getElementById("sector-options-list");
-  if (dl) dl.innerHTML = sectors.map((s) => `<option value="${s}">`).join("");
+  if (dl) dl.innerHTML = sectors.map((s) => `<option value="${escapeHtml(s)}">`).join("");
 
   if (!allocs.length) {
     list.innerHTML = '<p class="muted">No 401(k) allocations yet. Add funds below.</p>';
@@ -672,24 +677,25 @@ async function loadPlanAllocations() {
     .map(([aid, rows]) => {
       const bal = rows[0].balance || 0;
       const totalPct = rows.reduce((s, r) => s + r.allocation_pct, 0);
+      const escapedLabel = (r) => r.label.replace(/"/g, "&quot;");
       return `
         <div class="plan-account">
           <div class="label">
-            <strong>${rows[0].account_name}</strong>
-            <span class="muted">(${rows[0].institution}) — Balance: ${fmt(bal)}</span>
+            <strong>${escapeHtml(rows[0].account_name)}</strong>
+            <span class="muted">(${escapeHtml(rows[0].institution)}) — Balance: ${fmt(bal)}</span>
           </div>
           <table class="accounts-table">
             <thead><tr><th>Fund</th><th>Ticker</th><th class="num">%</th><th>Sector</th><th class="num">Value</th><th></th></tr></thead>
             <tbody>
               ${rows
                 .map(
-                  (r) => `<tr data-account-id="${r.account_id}" data-label="${r.label.replace(/"/g, "&quot;")}">
-                    <td>${r.label}</td>
-                    <td>${r.ticker || "—"}</td>
+                  (r) => `<tr data-account-id="${escapeHtml(r.account_id)}" data-label="${escapedLabel(r)}">
+                    <td>${escapeHtml(r.label)}</td>
+                    <td>${escapeHtml(r.ticker || "—")}</td>
                     <td class="num">${r.allocation_pct.toFixed(2)}%</td>
-                    <td class="muted">${r.sector}</td>
+                    <td class="muted">${escapeHtml(r.sector)}</td>
                     <td class="num">${fmt(bal * r.allocation_pct / 100)}</td>
-                    <td><button class="btn btn-sm btn-danger" data-delete-alloc='{"account_id":"${r.account_id}","label":"${r.label.replace(/"/g, "&quot;")}"}'>Delete</button></td>
+                    <td><button class="btn btn-sm btn-danger" data-delete-alloc='{"account_id":"${escapeHtml(r.account_id)}","label":"${escapedLabel(r)}"}'>Delete</button></td>
                   </tr>`
                 )
                 .join("")}
@@ -793,11 +799,6 @@ function renderLoansTable() {
       </td>
     </tr>
   `).join("");
-}
-
-function escapeHtml(s) {
-  return String(s || "").replace(/[&<>"']/g, (c) =>
-    ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
 }
 
 async function loadLoans() {
