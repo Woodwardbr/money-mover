@@ -133,7 +133,6 @@ def get_holdings(access_token: str) -> tuple[list[HoldingSnapshot], list[Securit
 def _env_to_plaid_environment(env: str) -> str:
     mapping = {
         "sandbox": plaid.Environment.Sandbox,
-        "development": "https://development.plaid.com",
         "production": plaid.Environment.Production,
     }
     return mapping.get(env, plaid.Environment.Sandbox)

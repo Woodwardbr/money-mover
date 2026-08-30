@@ -21,7 +21,7 @@ uv sync
 # 2. Configure Plaid credentials
 cp .env.example .env
 #   fill in PLAID_CLIENT_ID, PLAID_SECRET from https://dashboard.plaid.com
-#   set PLAID_ENV to sandbox | development | production
+#   set PLAID_ENV to sandbox or production
 
 # 3. Run
 uv run python main.py

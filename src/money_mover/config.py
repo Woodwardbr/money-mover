@@ -28,16 +28,24 @@ def _env(key: str, default: str = "") -> str:
 
 
 def _plaid_secret(env: str) -> str:
-    if env == "production":
-        return _env("PLAID_SECRET_PRODUCTION")
-    else:
-        return _env("PLAID_SECRET_SANDBOX")
+    """Env-specific secret if set, else the generic PLAID_SECRET.
 
+    ``env`` must already be normalized (lowercased/stripped).
+    """
+    specific = (
+        _env("PLAID_SECRET_PRODUCTION")
+        if env == "production"
+        else _env("PLAID_SECRET_SANDBOX")
+    )
+    return specific or _env("PLAID_SECRET")
+
+
+_PLAID_ENV = _env("PLAID_ENV", "sandbox").strip().lower()
 
 settings = Settings(
     plaid_client_id=_env("PLAID_CLIENT_ID"),
-    plaid_secret=_plaid_secret(_env("PLAID_ENV", "sandbox")),
-    plaid_env=_env("PLAID_ENV", "sandbox"),
+    plaid_secret=_plaid_secret(_PLAID_ENV),
+    plaid_env=_PLAID_ENV,
     app_host=_env("APP_HOST", "127.0.0.1"),
     app_port=int(_env("APP_PORT", "8000")),
     db_path=Path(_env("DB_PATH", "data/money-mover.db")),
