@@ -4,6 +4,7 @@ import calendar
 import sqlite3
 from collections import defaultdict
 from datetime import date, timedelta
+from pathlib import Path
 
 from . import categorize
 from .db import CASH_SECURITY_ID, get_conn
@@ -251,8 +252,6 @@ def transactions_for_friendly_category(
 
 # Months at or after this (year, month) are treated as having complete data.
 # Anything in the current calendar month is always excluded from averages.
-COMPLETE_MONTHS_START = (2026, 5)
-
 _MONTH_LABELS = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",
@@ -274,31 +273,23 @@ def _add_months(d: date, n: int) -> date:
 def _complete_month_range() -> tuple[date, date] | None:
     """(start, end) covering all complete months in the data window.
 
-    Start = the later of COMPLETE_MONTHS_START's first month or the earliest
-    transaction month; the current calendar month is never complete. Returns
-    None if there are no complete months yet.
+    Start is derived from the earliest transaction date in the data; the
+    current calendar month is never complete. Returns None if there are no
+    complete months yet.
     """
     today = date.today()
     first_incomplete = date(today.year, today.month, 1)
-    # The last complete month is the month before the current one.
     last_end = first_incomplete - timedelta(days=1)
-    if last_end < date(COMPLETE_MONTHS_START[0], COMPLETE_MONTHS_START[1], 1):
-        return None
 
     with get_conn() as conn:
         row = conn.execute("SELECT MIN(date) AS d FROM transactions").fetchone()
     if not row or not row["d"]:
-        earliest = date(COMPLETE_MONTHS_START[0], COMPLETE_MONTHS_START[1], 1)
-    else:
-        earliest = date.fromisoformat(row["d"][:10]).replace(day=1)
-
-    start = max(
-        earliest,
-        date(COMPLETE_MONTHS_START[0], COMPLETE_MONTHS_START[1], 1),
-    )
-    if start > last_end:
         return None
-    return start, last_end
+    earliest = date.fromisoformat(row["d"][:10]).replace(day=1)
+
+    if earliest > last_end:
+        return None
+    return earliest, last_end
 
 
 def _count_complete_months(rng: tuple[date, date]) -> int:
@@ -635,6 +626,8 @@ _UNKNOWN_SECTOR = "Uncategorized"
 # Curated ETF → sector map. Plaid labels every ETF as "Miscellaneous", so we
 # derive a meaningful sector from the ticker (which encodes the fund's
 # strategy). Add new ETFs here as your portfolio grows.
+# Ticker → sector mapping for well-known ETFs. This is public reference data,
+# not personal — it stays in source code.
 ETF_SECTOR_MAP: dict[str, str] = {
     # US broad market
     "SPY": "US Broad Market",
@@ -694,26 +687,33 @@ def _latest_holdings_snapshot_date(conn) -> str | None:
 
 # --- 401(k) plan allocations ----------------------------------------------
 
-# Default allocation set for known plans. Keyed by a case-insensitive
-# substring of the account name; applied idempotently on init so re-seeding
-# after a DB reset is automatic. New plans can be added via the UI.
-DEFAULT_PLAN_ALLOCATIONS: dict[str, list[tuple[str, str | None, float, str]]] = {
-    "ARCHER AVIATION 401(K)": [
-        ("VANG INST TOT STK MK", "VITSX", 29.74, "US Broad Market"),
-        ("VANG TOT INTL STK AD", "VTIAX", 29.52, "International Equity"),
-        ("FID SM CAP IDX", "FSSNX", 10.58, "US Small-Cap Value"),
-        ("FID BLUE CHIP GR K6", "FBGRX", 10.25, "US Broad Market"),
-        ("FID MID CAP IDX", "FSMDX", 10.15, "US Mid Cap"),
-        ("DFA EMRG MKT CORE EQ", "DFCEX", 5.07, "International Equity"),
-        ("FID US BOND IDX", "FXNAX", 4.69, "Bonds"),
-    ],
-}
+# Load default allocations from a gitignored JSON file keyed by a
+# case-insensitive substring of the account name. The file is optional —
+# when absent nothing is seeded.  See data/plan-allocations.example.json
+# for the expected format.
+def _load_default_plan_allocations() -> dict[str, list[tuple[str, str | None, float, str]]]:
+    import json
+
+    from .config import settings
+
+    alloc_path = Path(settings.db_path).parent / "plan-allocations.json"
+    if not alloc_path.exists():
+        return {}
+    with open(alloc_path) as fh:
+        raw = json.load(fh)
+    return {
+        key: [(r["label"], r.get("ticker"), r["allocation_pct"], r["sector"]) for r in rows]
+        for key, rows in raw.items()
+    }
 
 
 def seed_default_plan_allocations() -> int:
     """Idempotently insert the curated default allocations for any matching
     401(k) accounts that currently have none. Returns the number of rows
     inserted."""
+    default = _load_default_plan_allocations()
+    if not default:
+        return 0
     inserted = 0
     with get_conn() as conn:
         accts = conn.execute(
@@ -721,7 +721,7 @@ def seed_default_plan_allocations() -> int:
         ).fetchall()
         for acct in accts:
             name_u = (acct["name"] or "").upper()
-            for pattern, rows in DEFAULT_PLAN_ALLOCATIONS.items():
+            for pattern, rows in default.items():
                 if pattern.upper() not in name_u:
                     continue
                 existing = conn.execute(

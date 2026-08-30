@@ -1,0 +1,7 @@
+{
+  "YOUR 401(K) PLAN NAME": [
+    { "label": "US Total Stock Market", "ticker": "VTSAX", "allocation_pct": 50.0, "sector": "US Broad Market" },
+    { "label": "International Equity", "ticker": "VTIAX", "allocation_pct": 30.0, "sector": "International Equity" },
+    { "label": "US Bond Index", "ticker": "VBTLX", "allocation_pct": 20.0, "sector": "Bonds" }
+  ]
+}

@@ -11,5 +11,6 @@ wheels/
 
 # Secrets & local data
 .env
-data/
+data/*
+!data/*.example.json
 
