@@ -204,10 +204,10 @@ function renderSpendingCategories(categories) {
     .map(
       (c, i) => `
       <tr data-category-index="${i}">
-        <td>${c.category}</td>
+        <td>${escapeHtml(c.category)}</td>
         <td class="num">${fmt(c.total)}</td>
         <td class="num">${c.count}</td>
-        <td><button class="btn btn-sm set-budget-btn" data-set-budget-category="${c.category}" data-set-budget-suggested="${Math.ceil(c.total / 50) * 50}">Set budget</button></td>
+        <td><button class="btn btn-sm set-budget-btn" data-set-budget-category="${escapeHtml(c.category)}" data-set-budget-suggested="${Math.ceil(c.total / 50) * 50}">Set budget</button></td>
       </tr>`
     )
     .join("");
@@ -276,7 +276,7 @@ async function loadCategoryTransactions(category) {
       });
     });
   } catch (err) {
-    body.innerHTML = `<tr><td colspan="5" class="muted">Error: ${err.message}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="5" class="muted">Error: ${escapeHtml(err.message)}</td></tr>`;
   }
 }
 
@@ -360,7 +360,7 @@ function renderBudgetProgress(progress) {
       return `
         <div class="budget-bar ${over ? "over" : ""}">
           <div class="label">
-            <span>${b.category} <button class="btn btn-sm btn-danger" data-delete-budget="${b.category}">Delete</button></span>
+            <span>${escapeHtml(b.category)} <button class="btn btn-sm btn-danger" data-delete-budget="${escapeHtml(b.category)}">Delete</button></span>
             <span>${fmt(b.spent_so_far)} / ${fmt(b.monthly_limit)} (${b.pct_used.toFixed(0)}%)</span>
           </div>
           <div class="track"><div class="fill" style="width:${pct}%"></div></div>
@@ -389,9 +389,9 @@ async function loadMerchantRules() {
   list.innerHTML = `<table class="accounts-table"><thead><tr><th>Vendor</th><th>Category</th><th></th></tr></thead><tbody>${rules
     .map(
       (r) => `<tr>
-        <td>${r.merchant_pattern}</td>
-        <td>${r.target_category}</td>
-        <td><button class="btn btn-sm btn-danger" data-delete-rule="${r.merchant_pattern}">Delete</button></td>
+        <td>${escapeHtml(r.merchant_pattern)}</td>
+        <td>${escapeHtml(r.target_category)}</td>
+        <td><button class="btn btn-sm btn-danger" data-delete-rule="${escapeHtml(r.merchant_pattern)}">Delete</button></td>
       </tr>`
     )
     .join("")}</tbody></table>`;
@@ -447,11 +447,11 @@ async function loadSubscriptions() {
   </tr></thead><tbody>${subs
     .map(
       (s) => `<tr>
-        <td>${s.label}</td>
+        <td>${escapeHtml(s.label)}</td>
         <td class="num">${fmt(s.amount)}</td>
         <td class="num">${s.occurrences}</td>
         <td>${s.last_date}</td>
-        <td class="muted">${s.category}</td>
+        <td class="muted">${escapeHtml(s.category)}</td>
       </tr>`
     )
     .join("")}</tbody></table>`;
@@ -497,7 +497,7 @@ async function loadPortfolio() {
     .map(
       (s, i) => `
       <tr data-sector-index="${i}">
-        <td>${s.sector}</td>
+        <td>${escapeHtml(s.sector)}</td>
         <td class="num">${fmt(s.total)}</td>
         <td class="num">${s.asset_count}</td>
         <td></td>
@@ -542,10 +542,10 @@ async function loadSectorAssets(sector) {
     body.innerHTML = assets
       .map(
         (a) => `
-        <tr data-account-id="${a.account_id}" data-security-id="${a.security_id || ""}" data-name="${(a.name || a.ticker || "").replace(/"/g, "&quot;")}">
-          <td>${a.ticker || "—"}</td>
-          <td>${a.name}</td>
-          <td class="muted">${a.account_name || ""}${a.institution ? ` (${a.institution})` : ""}</td>
+        <tr data-account-id="${escapeHtml(a.account_id)}" data-security-id="${escapeHtml(a.security_id || "")}" data-name="${escapeHtml(a.name || a.ticker || "")}">
+          <td>${escapeHtml(a.ticker || "—")}</td>
+          <td>${escapeHtml(a.name)}</td>
+          <td class="muted">${escapeHtml(a.account_name || "")}${a.institution ? ` (${escapeHtml(a.institution)})` : ""}</td>
           <td class="num">${fmt(a.value)}</td>
           <td class="num">${a.quantity != null ? a.quantity.toFixed(4) : "—"}</td>
           <td><button class="btn btn-sm reclassify-sector-btn">Reclassify</button></td>
@@ -561,7 +561,7 @@ async function loadSectorAssets(sector) {
       });
     });
   } catch (err) {
-    body.innerHTML = `<tr><td colspan="6" class="muted">Error: ${err.message}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="6" class="muted">Error: ${escapeHtml(err.message)}</td></tr>`;
   }
 }
 
@@ -585,7 +585,7 @@ async function toggleReclassifySectorRow(tr, currentSector) {
 
   const options = await loadSectorOptions();
   const optHTML = options
-    .map((o) => `<option value="${o}" ${o === currentSector ? "selected" : ""}>${o}</option>`)
+    .map((o) => `<option value="${escapeHtml(o)}" ${o === currentSector ? "selected" : ""}>${escapeHtml(o)}</option>`)
     .join("");
 
   const newRow = document.createElement("tr");
@@ -677,7 +677,6 @@ async function loadPlanAllocations() {
     .map(([aid, rows]) => {
       const bal = rows[0].balance || 0;
       const totalPct = rows.reduce((s, r) => s + r.allocation_pct, 0);
-      const escapedLabel = (r) => r.label.replace(/"/g, "&quot;");
       return `
         <div class="plan-account">
           <div class="label">
@@ -689,13 +688,13 @@ async function loadPlanAllocations() {
             <tbody>
               ${rows
                 .map(
-                  (r) => `<tr data-account-id="${escapeHtml(r.account_id)}" data-label="${escapedLabel(r)}">
+                  (r) => `<tr data-account-id="${escapeHtml(r.account_id)}" data-label="${escapeHtml(r.label)}">
                     <td>${escapeHtml(r.label)}</td>
                     <td>${escapeHtml(r.ticker || "—")}</td>
                     <td class="num">${r.allocation_pct.toFixed(2)}%</td>
                     <td class="muted">${escapeHtml(r.sector)}</td>
                     <td class="num">${fmt(bal * r.allocation_pct / 100)}</td>
-                    <td><button class="btn btn-sm btn-danger" data-delete-alloc='{"account_id":"${escapeHtml(r.account_id)}","label":"${escapedLabel(r)}"}'>Delete</button></td>
+                    <td><button class="btn btn-sm btn-danger" data-delete-alloc='${escapeHtml(JSON.stringify({ account_id: r.account_id, label: r.label }))}'>Delete</button></td>
                   </tr>`
                 )
                 .join("")}
@@ -774,7 +773,7 @@ function populateLoanSelects() {
     const cur = sel.value;
     sel.innerHTML = '<option value="">Combined (all loans)</option>' +
       currentLoans
-        .map((l) => `<option value="${l.loan_id}">${l.name}</option>`)
+        .map((l) => `<option value="${escapeHtml(l.loan_id)}">${escapeHtml(l.name)}</option>`)
         .join("");
     if (cur) sel.value = cur;
   }
