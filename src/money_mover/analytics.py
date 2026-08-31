@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import calendar
+import json
 import sqlite3
 import uuid
 from collections import defaultdict
 from datetime import date, timedelta
 from pathlib import Path
 
-from . import categorize
+from . import categorize, db
 from .db import CASH_SECURITY_ID, get_conn
 from .models import (
     AssetDetail,
@@ -696,11 +697,10 @@ def _latest_holdings_snapshot_date(conn) -> str | None:
 # when absent nothing is seeded.  See data/plan-allocations.example.json
 # for the expected format.
 def _load_default_plan_allocations() -> dict[str, list[tuple[str, str | None, float, str]]]:
-    import json
-
-    from .config import settings
-
-    alloc_path = Path(settings.db_path).parent / "plan-allocations.json"
+    # Resolved via db.settings (not a direct config import) so it stays in
+    # sync with whatever path get_conn() is currently using — tests patch
+    # db.settings to point at a throwaway DB, and this must follow it.
+    alloc_path = Path(db.settings.db_path).parent / "plan-allocations.json"
     if not alloc_path.exists():
         return {}
     with open(alloc_path) as fh:
