@@ -13,6 +13,7 @@ from . import analytics
 from .api import router as api_router
 from .config import settings
 from .db import get_conn
+from .muse_api import router as muse_router
 
 BASE_DIR = Path(__file__).parent
 TEMPLATES = Jinja2Templates(directory=BASE_DIR / "templates")
@@ -28,6 +29,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Money Mover", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 app.include_router(api_router)
+app.include_router(muse_router)
 
 
 @app.get("/", response_class=HTMLResponse)

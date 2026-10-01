@@ -18,6 +18,7 @@ from plaid.model.investments_holdings_get_request import InvestmentsHoldingsGetR
 from plaid.model.item_public_token_exchange_request import (
     ItemPublicTokenExchangeRequest,
 )
+from plaid.model.liabilities_get_request import LiabilitiesGetRequest
 from plaid.model.link_token_create_request import LinkTokenCreateRequest
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
 from plaid.model.products import Products
@@ -277,3 +278,75 @@ def _tx_to_row(tx: Any) -> TransactionRow:
         category_primary=primary,
         category_detailed=detailed,
     )
+
+
+@dataclass(frozen=True)
+class CreditLiability:
+    account_id: str
+    last_statement_balance: float | None
+    last_statement_issue_date: str | None
+    minimum_payment_amount: float | None
+    next_payment_due_date: str | None
+    last_payment_amount: float | None
+    last_payment_date: str | None
+
+
+@dataclass(frozen=True)
+class StudentLoanLiability:
+    account_id: str
+    loan_name: str | None
+    next_monthly_payment: float | None
+    next_payment_due_date: str | None
+    minimum_payment_amount: float | None
+    last_payment_amount: float | None
+    last_payment_date: str | None
+    origination_date: str | None
+    expected_payoff_date: str | None
+
+
+def _opt_float(d: Any, key: str) -> float | None:
+    v = d.get(key)
+    return float(v) if v is not None else None
+
+
+def _opt_str(d: Any, key: str) -> str | None:
+    v = d.get(key)
+    return str(v) if v else None
+
+
+def get_liabilities(access_token: str) -> tuple[list[CreditLiability], list[StudentLoanLiability]]:
+    """Fetch credit and student loan liabilities for payoff workflow.
+
+    Returns (credit_liabilities, student_loan_liabilities).
+    """
+    client = _client()
+    response = client.liabilities_get(LiabilitiesGetRequest(access_token=access_token))
+    liabilities = response.get("liabilities", {}) or {}
+
+    credit_out = [
+        CreditLiability(
+            account_id=c["account_id"],
+            last_statement_balance=_opt_float(c, "last_statement_balance"),
+            last_statement_issue_date=_opt_str(c, "last_statement_issue_date"),
+            minimum_payment_amount=_opt_float(c, "minimum_payment_amount"),
+            next_payment_due_date=_opt_str(c, "next_payment_due_date"),
+            last_payment_amount=_opt_float(c, "last_payment_amount"),
+            last_payment_date=_opt_str(c, "last_payment_date"),
+        )
+        for c in liabilities.get("credit", []) or []
+    ]
+    student_out = [
+        StudentLoanLiability(
+            account_id=s["account_id"],
+            loan_name=s.get("loan_name"),
+            next_monthly_payment=_opt_float(s, "next_monthly_payment"),
+            next_payment_due_date=_opt_str(s, "next_payment_due_date"),
+            minimum_payment_amount=_opt_float(s, "minimum_payment_amount"),
+            last_payment_amount=_opt_float(s, "last_payment_amount"),
+            last_payment_date=_opt_str(s, "last_payment_date"),
+            origination_date=_opt_str(s, "origination_date"),
+            expected_payoff_date=_opt_str(s, "expected_payoff_date"),
+        )
+        for s in liabilities.get("student", []) or []
+    ]
+    return credit_out, student_out

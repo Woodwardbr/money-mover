@@ -1,0 +1,63 @@
+# Muse API via Tailscale
+
+This exposes a minimal, token-authenticated API for Muse's monthly payoff workflow.
+
+## What it does
+
+- `GET /api/muse/health` — health check
+- `GET /api/muse/payoff-balances` — statement balances for credit cards + monthly payment due for student loans (via Plaid Liabilities)
+- `GET /api/muse/spending-summary?period=YYYY-MM` — budgets vs actuals + average monthly spending
+- `POST /api/muse/record-payment` — record a payoff payment: `{"account_id": "...", "amount": 123.45, "payment_date": "2026-10-01"}`
+
+All endpoints require header: `X-Muse-Token: <MUSE_API_TOKEN>`
+
+## Setup
+
+1. Generate a token and add to `.env`:
+   ```bash
+   openssl rand -hex 32
+   # add to .env:
+   MUSE_API_TOKEN=<output>
+   ```
+
+2. Install Tailscale on your local machine (where money-mover runs):
+   ```bash
+   curl -fsSL https://tailscale.com/install.sh | sh
+   sudo tailscale up
+   ```
+
+3. Run money-mover bound to the Tailscale interface only:
+   ```bash
+   APP_HOST=$(tailscale ip -4) uv run python main.py
+   ```
+   Do **not** use `APP_HOST=0.0.0.0`: only `/api/muse/*` checks a token, so the
+   dashboard and the rest of `/api` would be open to anything that can reach the port.
+   Note that the dashboard is then reachable at the Tailscale IP, not 127.0.0.1.
+
+4. On Muse's VM, install Tailscale and join the same tailnet:
+   ```bash
+   curl -fsSL https://tailscale.com/install.sh | sh
+   sudo tailscale up
+   ```
+
+5. Share your Tailscale IP + token with Muse (via chat, not in git):
+   - Your Tailscale IP: `tailscale ip -4` (e.g. `100.x.y.z`)
+   - Muse queries: `http://100.x.y.z:8000/api/muse/payoff-balances` with `X-Muse-Token` header
+
+## Security notes
+
+- Never commit `.env` with real tokens (it's gitignored).
+- The Muse token is separate from Plaid credentials — rotate it with `openssl rand -hex 32` if exposed.
+- Tailscale ACLs: restrict to only Muse's device if desired in Tailscale admin panel.
+- This API is read-mostly; `record-payment` only writes a local `loan_payments` row, it does not move money.
+- `record-payment` only stores something when the account name matches a tracked loan; otherwise it returns `"stored": false` (card payments arrive via Plaid sync).
+- `payoff-balances` reports per-institution Plaid failures under `errors` instead of omitting them. Liabilities must be enabled on your Plaid account and requested at link time; existing items may need re-linking.
+
+## For Muse's payoff workflow
+
+Muse will:
+1. `GET /api/muse/payoff-balances` → build payment plan (full statement balances for cards, monthly payment due for Aidvantage)
+2. `GET /api/muse/spending-summary` → flag significant/unusual expenses vs budget/average
+3. Present plan for manual approval in chat
+4. After approval, guide payments via browser (or you pay manually)
+5. `POST /api/muse/record-payment` for each payment + remind you to Sync in money-mover UI

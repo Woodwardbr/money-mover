@@ -1,0 +1,176 @@
+"""Muse API for monthly payoff workflow.
+
+Exposes payoff-relevant balances over Tailscale with token auth.
+All routes live under /api/muse and require an ``X-Muse-Token`` header.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+import secrets
+from datetime import date, timedelta
+
+from fastapi import APIRouter, Depends, Header, HTTPException
+from pydantic import BaseModel, Field
+
+from . import analytics, plaid
+from .config import settings
+from .db import get_conn
+
+log = logging.getLogger(__name__)
+
+_PERIOD_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+
+
+def require_token(x_muse_token: str | None = Header(default=None)) -> None:
+    expected = settings.muse_api_token
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail="MUSE_API_TOKEN not configured. Set it in .env.",
+        )
+    if not x_muse_token or not secrets.compare_digest(x_muse_token.encode(), expected.encode()):
+        raise HTTPException(status_code=401, detail="Invalid Muse token")
+
+
+router = APIRouter(prefix="/api/muse", dependencies=[Depends(require_token)])
+
+
+class RecordPaymentReq(BaseModel):
+    account_id: str = Field(min_length=1)
+    amount: float = Field(gt=0)
+    payment_date: date | None = None
+    notes: str | None = None
+
+
+@router.get("/health")
+def muse_health() -> dict:
+    return {"status": "ok", "plaid_env": settings.plaid_env_value}
+
+
+@router.get("/payoff-balances")
+def payoff_balances() -> dict:
+    """Return statement balances for the payoff workflow.
+
+    Credit cards: last statement balance, minimum payment, due date.
+    Student loans: next monthly payment + due date.
+
+    Items whose liabilities lookup fails are listed under ``errors`` rather than
+    dropped, so a missing card is never mistaken for a zero balance.
+    """
+    with get_conn() as conn:
+        items = conn.execute("SELECT item_id, access_token, institution FROM items").fetchall()
+        accounts = {
+            r["account_id"]: dict(r) for r in conn.execute("SELECT * FROM accounts").fetchall()
+        }
+
+    credit_cards: list[dict] = []
+    student_loans: list[dict] = []
+    errors: list[dict] = []
+
+    for item in items:
+        try:
+            credit_liabs, student_liabs = plaid.get_liabilities(item["access_token"])
+        except Exception as exc:
+            log.warning("Liabilities fetch failed for %s: %s", item["institution"], exc)
+            errors.append({"institution": item["institution"], "error": str(exc)})
+            continue
+
+        for c in credit_liabs:
+            acct = accounts.get(c.account_id, {})
+            credit_cards.append(
+                {
+                    "account_id": c.account_id,
+                    "name": acct.get("name"),
+                    "mask": acct.get("mask"),
+                    "institution": item["institution"],
+                    "statement_balance": c.last_statement_balance,
+                    "statement_issue_date": c.last_statement_issue_date,
+                    "minimum_payment": c.minimum_payment_amount,
+                    "due_date": c.next_payment_due_date,
+                    "last_payment_amount": c.last_payment_amount,
+                    "last_payment_date": c.last_payment_date,
+                }
+            )
+
+        for s in student_liabs:
+            acct = accounts.get(s.account_id, {})
+            student_loans.append(
+                {
+                    "account_id": s.account_id,
+                    "name": acct.get("name"),
+                    "mask": acct.get("mask"),
+                    "institution": item["institution"],
+                    "loan_name": s.loan_name,
+                    "monthly_payment_due": s.next_monthly_payment,
+                    "due_date": s.next_payment_due_date,
+                    "minimum_payment": s.minimum_payment_amount,
+                    "last_payment_amount": s.last_payment_amount,
+                    "last_payment_date": s.last_payment_date,
+                }
+            )
+
+    return {"credit_cards": credit_cards, "student_loans": student_loans, "errors": errors}
+
+
+@router.get("/spending-summary")
+def spending_summary(period: str | None = None) -> dict:
+    """Budgets vs actuals for a month, plus average monthly spending by category.
+
+    ``period`` is ``YYYY-MM`` and defaults to the last complete month.
+    """
+    if period is None:
+        prev = date.today().replace(day=1) - timedelta(days=1)
+        period = f"{prev.year:04d}-{prev.month:02d}"
+    elif not _PERIOD_RE.match(period):
+        raise HTTPException(status_code=400, detail="period must be 'YYYY-MM'")
+
+    budgets = [
+        {
+            "category": b.category,
+            "limit": b.monthly_limit,
+            "spent": b.spent_so_far,
+            "remaining": b.remaining,
+        }
+        for b in analytics.budget_progress(period)
+    ]
+    average_monthly = [
+        {"category": c.category, "avg_monthly": c.total, "count": c.transaction_count}
+        for c in analytics.average_monthly_spending_by_friendly_category()
+    ]
+    return {"period": period, "budgets": budgets, "average_monthly": average_monthly}
+
+
+@router.post("/record-payment")
+def record_payment(payload: RecordPaymentReq) -> dict:
+    """Record a manual payoff payment so it shows in money-mover.
+
+    If the account matches a tracked loan (by name), a loan_payments row is
+    written. Otherwise nothing is stored (card payments arrive via Plaid sync)
+    and the response says so with ``"stored": false``.
+    """
+    with get_conn() as conn:
+        acct = conn.execute(
+            "SELECT name FROM accounts WHERE account_id = ?", (payload.account_id,)
+        ).fetchone()
+    if acct is None:
+        raise HTTPException(status_code=404, detail="Unknown account_id")
+
+    acct_name = (acct["name"] or "").lower()
+    loan = next(
+        (ln for ln in analytics.list_loans() if ln.name and ln.name.lower() in acct_name),
+        None,
+    )
+    if loan is None:
+        return {"status": "noted", "stored": False, "account": acct["name"]}
+
+    payment_id = analytics.record_loan_payment(
+        payment_date=payload.payment_date or date.today(),
+        amount=payload.amount,
+        loan_id=loan.loan_id,
+        status="Received",
+        source="Muse payoff",
+        notes=payload.notes or "Muse monthly payoff",
+    )
+    return {"status": "recorded", "stored": True, "payment_id": payment_id, "loan": loan.name}
