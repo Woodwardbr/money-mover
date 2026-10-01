@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -86,6 +87,74 @@ def test_payoff_balances_skips_items_without_credit_or_loan(client, make_account
     assert body["errors"] == []
     assert [c["account_id"] for c in body["credit_cards"]] == ["card"]
     assert body["credit_cards"][0]["statement_balance"] == 500.0
+    assert body["credit_cards"][0]["payoff_amount"] == 500.0
+    assert body["credit_cards"][0]["balance_source"] == "statement"
+
+
+def plaid_error(code: str) -> Exception:
+    exc = plaid.plaid.ApiException(status=400, reason="Bad Request")
+    exc.body = json.dumps({"error_code": code, "error_message": "nope"})
+    return exc
+
+
+def test_payoff_balances_falls_back_to_current_without_consent(
+    client, make_account, make_balance, monkeypatch
+):
+    make_account("card", kind="credit", item_id="bank", institution="Bank")
+    make_balance("card", "2026-09-01", 900.0)
+    make_balance("card", "2026-09-29", 1234.5)
+
+    def no_consent(token: str):
+        raise plaid_error("ADDITIONAL_CONSENT_REQUIRED")
+
+    monkeypatch.setattr(plaid, "get_liabilities", no_consent)
+    body = client.get("/api/muse/payoff-balances", headers=AUTH).json()
+
+    assert body["errors"] == []
+    card = body["credit_cards"][0]
+    assert card["payoff_amount"] == 1234.5
+    assert card["balance_source"] == "current"
+    assert card["balance_as_of"] == "2026-09-29"
+    assert card["statement_balance"] is None
+    assert card["due_date"] is None
+
+
+def test_payoff_balances_reports_unexpected_errors_but_keeps_card(
+    client, make_account, make_balance, monkeypatch
+):
+    make_account("card", kind="credit", item_id="bank", institution="Bank")
+    make_balance("card", "2026-09-29", 80.0)
+
+    def broken(token: str):
+        raise plaid_error("ITEM_LOGIN_REQUIRED")
+
+    monkeypatch.setattr(plaid, "get_liabilities", broken)
+    body = client.get("/api/muse/payoff-balances", headers=AUTH).json()
+
+    assert body["errors"] == [{"institution": "Bank", "error_code": "ITEM_LOGIN_REQUIRED"}]
+    assert body["credit_cards"][0]["payoff_amount"] == 80.0
+
+
+def test_payoff_balances_includes_tracked_loans(client):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO loans (loan_id, name, min_payment, next_due_date, auto_pay) "
+            "VALUES ('l1', 'Direct Loan', 150.0, '2026-10-15', 1)"
+        )
+    body = client.get("/api/muse/payoff-balances", headers=AUTH).json()
+
+    assert body["tracked_loans"] == [
+        {
+            "loan_id": "l1",
+            "name": "Direct Loan",
+            "monthly_payment": 150.0,
+            "next_due_date": "2026-10-15",
+            "current_balance": None,
+            "interest_rate": None,
+            "auto_pay": True,
+            "status": "Scheduled",
+        }
+    ]
 
 
 def test_record_payment_unknown_account_404(client):
