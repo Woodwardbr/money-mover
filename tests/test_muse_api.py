@@ -327,3 +327,43 @@ def test_update_loans_rejects_duplicates_and_empty(client, two_loans):
 def test_update_loans_requires_token(client, two_loans):
     body = {"updates": [{"loan_id": "l1", "min_payment": 1}]}
     assert client.post("/api/muse/update-loans", json=body).status_code == 401
+
+
+def _months_ago(n: int) -> str:
+    from datetime import date
+
+    today = date.today()
+    total = today.year * 12 + today.month - 1 - n
+    return f"{total // 12:04d}-{total % 12 + 1:02d}"
+
+
+def test_spending_summary_compares_month_to_other_months(client, make_account, make_txn):
+    make_account("cc", kind="credit")
+    m3, m2, m1 = _months_ago(3), _months_ago(2), _months_ago(1)
+    make_txn("a", "cc", f"{m3}-05", 100.0, override="Groceries")
+    make_txn("b", "cc", f"{m3}-06", 60.0, override="Restaurants")
+    make_txn("c", "cc", f"{m2}-05", 200.0, override="Groceries")
+    make_txn("d", "cc", f"{m1}-05", 450.0, override="Groceries", merchant="Costco")
+    make_txn("e", "cc", f"{m1}-20", 150.0, override="Groceries")
+
+    body = client.get("/api/muse/spending-summary", params={"period": m1}, headers=AUTH).json()
+
+    assert body["month_complete"] is True
+    assert body["baseline_months"] == 2  # m3 and m2; the month under review is excluded
+    cats = {c["category"]: c for c in body["categories"]}
+    groceries = cats[next(k for k in cats if "Grocer" in k)]
+    assert (groceries["spent"], groceries["avg_monthly"]) == (600.0, 150.0)
+    assert (groceries["difference"], groceries["pct_of_avg"]) == (450.0, 400.0)
+    assert body["categories"][0] is not None and body["categories"][0]["difference"] == 450.0
+    dining = [c for c in body["categories"] if c["spent"] == 0]
+    assert dining and dining[0]["avg_monthly"] == 30.0
+    assert [t["amount"] for t in body["largest_transactions"]] == [450.0, 150.0]
+    assert body["largest_transactions"][0]["merchant"] == "Costco"
+
+
+def test_spending_summary_current_month_is_incomplete(client):
+    body = client.get(
+        "/api/muse/spending-summary", params={"period": _months_ago(0)}, headers=AUTH
+    ).json()
+    assert body["month_complete"] is False
+    assert body["categories"] == []
