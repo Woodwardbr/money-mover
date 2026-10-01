@@ -7,7 +7,7 @@ This exposes a minimal, token-authenticated API for Muse's monthly payoff workfl
 - `GET /api/muse/health` — health check
 - `GET /api/muse/payoff-balances` — statement balances for credit cards + monthly payment due for student loans (via Plaid Liabilities)
 - `GET /api/muse/spending-summary?period=YYYY-MM` — budgets vs actuals + average monthly spending
-- `POST /api/muse/record-payment` — record a payoff payment: `{"account_id": "...", "amount": 123.45, "payment_date": "2026-10-01"}`
+- `POST /api/muse/record-payment` — record a payoff payment: `{"account_id": "...", "amount": 123.45, "payment_date": "2026-10-01"}`, optionally with `"loan_id"` to target one tracked loan
 
 All endpoints require header: `X-Muse-Token: <MUSE_API_TOKEN>`
 
@@ -50,8 +50,8 @@ All endpoints require header: `X-Muse-Token: <MUSE_API_TOKEN>`
 - The Muse token is separate from Plaid credentials — rotate it with `openssl rand -hex 32` if exposed.
 - Tailscale ACLs: restrict to only Muse's device if desired in Tailscale admin panel.
 - This API is read-mostly; `record-payment` only writes a local `loan_payments` row, it does not move money.
-- `record-payment` only stores something when the account name matches a tracked loan; otherwise it returns `"stored": false` (card payments arrive via Plaid sync).
-- `payoff-balances` reports per-institution Plaid failures under `errors` instead of omitting them. Liabilities must be enabled on your Plaid account and requested at link time; existing items may need re-linking.
+- `record-payment` stores a `loan_payments` row when `loan_id` is given, or as a combined payment across all loans when the account is a Plaid loan account (e.g. Aidvantage). Otherwise it returns `"stored": false` (card payments arrive via Plaid sync).
+- `payoff-balances` only queries institutions with credit or loan accounts, and reports per-institution Plaid failures under `errors` instead of omitting them. Liabilities must be enabled on your Plaid account. New links request it automatically; items linked before this change need re-linking.
 
 ## For Muse's payoff workflow
 
