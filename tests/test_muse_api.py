@@ -18,7 +18,7 @@ def client(monkeypatch):
     monkeypatch.setattr(
         muse_api, "settings", dataclasses.replace(muse_api.settings, muse_api_token=TOKEN)
     )
-    return TestClient(app)
+    return TestClient(muse_api.muse_app)
 
 
 def make_loan(loan_id: str, name: str) -> None:
@@ -42,7 +42,17 @@ def test_unconfigured_token_returns_503(monkeypatch):
     monkeypatch.setattr(
         muse_api, "settings", dataclasses.replace(muse_api.settings, muse_api_token="")
     )
-    assert TestClient(app).get("/api/muse/health", headers=AUTH).status_code == 503
+    assert TestClient(muse_api.muse_app).get("/api/muse/health", headers=AUTH).status_code == 503
+
+
+def test_muse_app_serves_only_muse_routes(client):
+    for path in ("/", "/api/budgets", "/docs", "/openapi.json"):
+        assert client.get(path, headers=AUTH).status_code == 404, path
+    assert client.delete("/api/items/item1", headers=AUTH).status_code == 404
+
+
+def test_dashboard_app_does_not_serve_muse_routes():
+    assert TestClient(app).get("/api/muse/health", headers=AUTH).status_code == 404
 
 
 def test_spending_summary_rejects_bad_period(client):
