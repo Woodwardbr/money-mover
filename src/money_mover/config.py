@@ -17,7 +17,9 @@ class Settings:
     app_host: str
     app_port: int
     db_path: Path
-    muse_api_token: str = ""
+    muse_api_token: str
+    muse_host: str
+    muse_port: int
 
     @property
     def plaid_env_value(self) -> str:
@@ -51,4 +53,6 @@ settings = Settings(
     app_port=int(_env("APP_PORT", "8000")),
     db_path=Path(_env("DB_PATH", "data/money-mover.db")),
     muse_api_token=_env("MUSE_API_TOKEN"),
+    muse_host=_env("MUSE_HOST"),
+    muse_port=int(_env("MUSE_PORT", "8001")),
 )

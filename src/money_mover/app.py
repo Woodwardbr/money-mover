@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import ipaddress
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -13,7 +15,6 @@ from . import analytics
 from .api import router as api_router
 from .config import settings
 from .db import get_conn
-from .muse_api import router as muse_router
 
 BASE_DIR = Path(__file__).parent
 TEMPLATES = Jinja2Templates(directory=BASE_DIR / "templates")
@@ -29,7 +30,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Money Mover", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 app.include_router(api_router)
-app.include_router(muse_router)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -101,10 +101,39 @@ def debt_page(request: Request) -> HTMLResponse:
     )
 
 
+def _is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def run() -> None:
-    uvicorn.run(
-        "money_mover.app:app",
-        host=settings.app_host,
-        port=settings.app_port,
-        reload=False,
-    )
+    """Serve the dashboard, plus the Muse API on its own listener if MUSE_HOST is set.
+
+    The two are separate apps so that the address Muse can reach only serves
+    ``/api/muse/*``; the dashboard and the rest of ``/api`` stay on APP_HOST.
+    """
+    configs = [
+        uvicorn.Config("money_mover.app:app", host=settings.app_host, port=settings.app_port)
+    ]
+    if settings.muse_host:
+        if not settings.muse_api_token:
+            raise SystemExit("MUSE_HOST is set but MUSE_API_TOKEN is empty; refusing to start.")
+        if not _is_loopback(settings.app_host):
+            raise SystemExit(
+                "MUSE_HOST is set, so APP_HOST must be a loopback address (e.g. 127.0.0.1); "
+                "otherwise Muse could reach the dashboard and the rest of /api."
+            )
+        configs.append(
+            uvicorn.Config(
+                "money_mover.muse_api:muse_app", host=settings.muse_host, port=settings.muse_port
+            )
+        )
+
+    async def serve_all() -> None:
+        await asyncio.gather(*(uvicorn.Server(c).serve() for c in configs))
+
+    asyncio.run(serve_all())

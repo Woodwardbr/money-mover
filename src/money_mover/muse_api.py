@@ -2,6 +2,10 @@
 
 Exposes payoff-relevant balances over Tailscale with token auth.
 All routes live under /api/muse and require an ``X-Muse-Token`` header.
+
+``muse_app`` is a standalone app served on its own listener (MUSE_HOST) and
+contains only these routes, so Muse cannot reach the dashboard or the rest of
+``/api`` regardless of the token.
 """
 
 from __future__ import annotations
@@ -11,7 +15,7 @@ import re
 import secrets
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from . import analytics, plaid
@@ -189,3 +193,8 @@ def record_payment(payload: RecordPaymentReq) -> dict:
         notes=payload.notes or "Muse monthly payoff",
     )
     return {"status": "recorded", "stored": True, "payment_id": payment_id, "loan": loan_name}
+
+
+# No interactive docs/OpenAPI schema: Muse gets exactly the routes above.
+muse_app = FastAPI(title="Money Mover — Muse", docs_url=None, redoc_url=None, openapi_url=None)
+muse_app.include_router(router)
