@@ -32,6 +32,26 @@ class CategorySpend:
 
 
 @dataclass(frozen=True)
+class CategoryComparison:
+    """One category's spend in a month vs its average over the other complete months."""
+    category: str
+    spent: float
+    transaction_count: int
+    avg_monthly: float
+    difference: float              # spent - avg_monthly
+    pct_of_avg: float | None       # spent / avg_monthly * 100; None when there is no average
+
+
+@dataclass(frozen=True)
+class MonthComparison:
+    period: str
+    month_complete: bool           # False for the current, still-running month
+    baseline_months: int           # complete months the averages are taken over
+    categories: list[CategoryComparison]
+    largest_transactions: list[dict]
+
+
+@dataclass(frozen=True)
 class BudgetProgress:
     category: str
     monthly_limit: float

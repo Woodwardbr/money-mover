@@ -224,9 +224,15 @@ def _loan_dict(ln) -> dict:
 
 @router.get("/spending-summary")
 def spending_summary(period: str | None = None) -> dict:
-    """Budgets vs actuals for a month, plus average monthly spending by category.
+    """A month's spending next to the usual, for the unusual-spending check.
 
     ``period`` is ``YYYY-MM`` and defaults to the last complete month.
+
+    - ``categories``: every category's spend that month vs its average over the
+      other complete months (``difference``, ``pct_of_avg``), biggest overspend first.
+    - ``largest_transactions``: the month's 10 largest purchases.
+    - ``budgets``: budget vs actual, for categories that have a budget.
+    - ``average_monthly``: averages over all complete months (kept for compatibility).
     """
     if period is None:
         prev = date.today().replace(day=1) - timedelta(days=1)
@@ -247,7 +253,26 @@ def spending_summary(period: str | None = None) -> dict:
         {"category": c.category, "avg_monthly": c.total, "count": c.transaction_count}
         for c in analytics.average_monthly_spending_by_friendly_category()
     ]
-    return {"period": period, "budgets": budgets, "average_monthly": average_monthly}
+    comparison = analytics.month_vs_average(period)
+    return {
+        "period": period,
+        "month_complete": comparison.month_complete,
+        "baseline_months": comparison.baseline_months,
+        "categories": [
+            {
+                "category": c.category,
+                "spent": round(c.spent, 2),
+                "count": c.transaction_count,
+                "avg_monthly": round(c.avg_monthly, 2),
+                "difference": round(c.difference, 2),
+                "pct_of_avg": round(c.pct_of_avg, 1) if c.pct_of_avg is not None else None,
+            }
+            for c in comparison.categories
+        ],
+        "largest_transactions": comparison.largest_transactions,
+        "budgets": budgets,
+        "average_monthly": average_monthly,
+    }
 
 
 _AUTOPAY_DETAIL = (

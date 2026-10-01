@@ -13,9 +13,11 @@ from .db import CASH_SECURITY_ID, get_conn
 from .models import (
     AssetDetail,
     BudgetProgress,
+    CategoryComparison,
     CategorySpend,
     DebtLoan,
     LoanPayment,
+    MonthComparison,
     NetWorthPoint,
     SectorAllocation,
     Subscription,
@@ -379,6 +381,76 @@ def average_monthly_spending_by_friendly_category() -> list[CategorySpend]:
         )
         for cat, agg in sorted(totals.items(), key=lambda kv: -kv[1]["total"])
     ]
+
+
+def month_vs_average(period: str, top_n: int = 10) -> MonthComparison | None:
+    """Spending per friendly category in ``period`` (``YYYY-MM``) next to the
+    average over every *other* complete month, plus the month's largest
+    transactions.
+
+    The month under review is left out of the baseline so an unusual month
+    doesn't pull its own average toward itself. Returns None for an
+    unparseable period.
+    """
+    rng = spending_for_period(period)
+    if rng is None or period == "avg":
+        return None
+    start, end = rng
+    baseline = _complete_month_range()
+
+    with get_conn() as conn:
+        month_rows = _spend_rows(conn, start, end)
+        baseline_rows = _spend_rows(conn, *baseline) if baseline else []
+        rules = _load_merchant_rules(conn)
+
+    in_month = (start.isoformat(), end.isoformat())
+    baseline_rows = [r for r in baseline_rows if not in_month[0] <= r["date"][:10] <= in_month[1]]
+    baseline_months = _count_complete_months(baseline) if baseline else 0
+    if baseline and baseline[0] <= start <= baseline[1]:
+        baseline_months -= 1
+
+    spent: dict[str, dict] = defaultdict(lambda: {"total": 0.0, "n": 0})
+    for r in month_rows:
+        cat = _row_friendly_category(r, rules)
+        spent[cat]["total"] += float(r["amount"])
+        spent[cat]["n"] += 1
+    base_totals: dict[str, float] = defaultdict(float)
+    for r in baseline_rows:
+        base_totals[_row_friendly_category(r, rules)] += float(r["amount"])
+
+    categories = []
+    for cat in set(spent) | set(base_totals):
+        total = spent[cat]["total"] if cat in spent else 0.0
+        avg = base_totals[cat] / baseline_months if baseline_months else 0.0
+        categories.append(
+            CategoryComparison(
+                category=cat,
+                spent=total,
+                transaction_count=spent[cat]["n"] if cat in spent else 0,
+                avg_monthly=avg,
+                difference=total - avg,
+                pct_of_avg=total / avg * 100.0 if avg > 0 else None,
+            )
+        )
+    categories.sort(key=lambda c: -c.difference)
+
+    largest = sorted(month_rows, key=lambda r: -float(r["amount"]))[:top_n]
+    return MonthComparison(
+        period=period,
+        month_complete=end < date.today().replace(day=1),
+        baseline_months=baseline_months,
+        categories=categories,
+        largest_transactions=[
+            {
+                "date": r["date"][:10],
+                "amount": float(r["amount"]),
+                "merchant": r["merchant"] or r["name"],
+                "category": _row_friendly_category(r, rules),
+                "account": r["account_name"],
+            }
+            for r in largest
+        ],
+    )
 
 
 def transactions_for_period_category(

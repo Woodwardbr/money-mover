@@ -11,7 +11,7 @@ new capability, add a route to `muse_api.py`; nothing else is exposed.
 
 - `GET /api/muse/health` — health check
 - `GET /api/muse/payoff-balances` — what to pay on each credit card (`payoff_amount`), plus the Debt Tracker's loans (`tracked_loans`: monthly payment, due date, `auto_pay`, `loan_id`). A card's `balance_source` is `"statement"` when Plaid Liabilities is available for it, otherwise `"current"` (balance from the last sync; no due date or minimum payment)
-- `GET /api/muse/spending-summary?period=YYYY-MM` — budgets vs actuals + average monthly spending
+- `GET /api/muse/spending-summary?period=YYYY-MM` — a month's spending vs normal: `categories` (each category's spend that month vs its average over the *other* complete months, with `difference` and `pct_of_avg`, biggest overspend first), the month's 10 `largest_transactions`, and `budgets` (budget vs actual, if any budgets are set). `period` defaults to the last complete month; `month_complete: false` means the month is still in progress
 - `POST /api/muse/record-payment` — record a payoff payment: `{"account_id": "...", "amount": 123.45, "payment_date": "2026-10-01"}`, optionally with `"loan_id"` to target one tracked loan
 - `POST /api/muse/update-loans` — update tracked loans from Aidvantage: `{"updates": [{"loan_id": "...", "current_balance": 4950.12, "min_payment": 55.98, "next_due_date": "2026-11-15", "interest_rate": 5.5, "status": "Scheduled"}]}`. Every field except `loan_id` is optional; only fields sent change. Returns the updated loans
 
@@ -73,7 +73,7 @@ All endpoints require header: `X-Muse-Token: <MUSE_API_TOKEN>`
 
 Muse will:
 1. `GET /api/muse/payoff-balances` → build payment plan (`payoff_amount` for each card; skip tracked loans with `auto_pay: true`)
-2. `GET /api/muse/spending-summary` → flag significant/unusual expenses vs budget/average
+2. `GET /api/muse/spending-summary?period=YYYY-MM` → flag categories well above their average and large one-off transactions
 3. Present plan for manual approval in chat
 4. After approval, guide payments via browser (or you pay manually)
 5. `POST /api/muse/record-payment` for each payment + remind you to Sync in money-mover UI
