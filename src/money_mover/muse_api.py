@@ -216,6 +216,11 @@ def spending_summary(period: str | None = None) -> dict:
     return {"period": period, "budgets": budgets, "average_monthly": average_monthly}
 
 
+_AUTOPAY_DETAIL = (
+    "Loan is on autopay; its payments are logged by the user. Not recording, to avoid duplicates."
+)
+
+
 @router.post("/record-payment")
 def record_payment(payload: RecordPaymentReq) -> dict:
     """Record a manual payoff payment so it shows in money-mover.
@@ -226,6 +231,10 @@ def record_payment(payload: RecordPaymentReq) -> dict:
     accounts are not stored (card payments arrive via Plaid sync) and the
     response says so with ``"stored": false``. The loan's balance is not
     updated; that happens when the user edits it in the Debt Tracker.
+
+    Loans on autopay are refused with 409: the user logs those payments
+    themselves, so a Muse entry would double-count. A combined payment is
+    refused when every tracked loan is on autopay.
     """
     with get_conn() as conn:
         acct = conn.execute(
@@ -236,11 +245,20 @@ def record_payment(payload: RecordPaymentReq) -> dict:
         loan_name: str | None = None
         if payload.loan_id is not None:
             loan = conn.execute(
-                "SELECT name FROM loans WHERE loan_id = ?", (payload.loan_id,)
+                "SELECT name, auto_pay FROM loans WHERE loan_id = ?", (payload.loan_id,)
             ).fetchone()
             if loan is None:
                 raise HTTPException(status_code=404, detail="Unknown loan_id")
+            if loan["auto_pay"]:
+                raise HTTPException(status_code=409, detail=_AUTOPAY_DETAIL)
             loan_name = loan["name"]
+        elif acct["kind"] == "loan":
+            manual = conn.execute(
+                "SELECT COUNT(*) AS n FROM loans WHERE auto_pay = 0"
+            ).fetchone()["n"]
+            tracked = conn.execute("SELECT COUNT(*) AS n FROM loans").fetchone()["n"]
+            if tracked and not manual:
+                raise HTTPException(status_code=409, detail=_AUTOPAY_DETAIL)
 
     if payload.loan_id is None and acct["kind"] != "loan":
         return {"status": "noted", "stored": False, "account": acct["name"]}

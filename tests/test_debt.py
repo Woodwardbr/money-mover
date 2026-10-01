@@ -65,3 +65,32 @@ def test_lump_sum_clears_everything():
     proj = project_payoff(extra_onetime=10000.0, extra_monthly=0.0)
     assert proj["months_to_payoff"] == 0
     assert proj["payoff_date"] is not None
+
+def test_roll_due_date_forward():
+    from datetime import date
+
+    from money_mover.analytics import roll_due_date_forward
+
+    assert roll_due_date_forward(date(2026, 7, 15), date(2026, 9, 30)) == date(2026, 10, 15)
+    assert roll_due_date_forward(date(2026, 7, 15), date(2026, 9, 15)) == date(2026, 9, 15)
+    assert roll_due_date_forward(date(2026, 10, 15), date(2026, 9, 30)) == date(2026, 10, 15)
+    # Day-of-month is clamped per month, not carried forward from the clamp.
+    assert roll_due_date_forward(date(2026, 1, 31), date(2026, 2, 10)) == date(2026, 2, 28)
+    assert roll_due_date_forward(date(2026, 1, 31), date(2026, 3, 1)) == date(2026, 3, 31)
+    assert roll_due_date_forward(date(2025, 11, 30), date(2026, 1, 5)) == date(2026, 1, 30)
+
+
+def test_list_loans_rolls_only_autopay_due_dates():
+    from datetime import date
+
+    from money_mover.analytics import list_loans
+
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO loans (loan_id, name, next_due_date, auto_pay) "
+            "VALUES ('a', 'Auto', '2020-01-15', 1), ('m', 'Manual', '2020-01-15', 0)"
+        )
+    loans = {ln.loan_id: ln for ln in list_loans()}
+    assert loans["a"].next_due_date >= date.today()
+    assert loans["a"].next_due_date.day == 15
+    assert loans["m"].next_due_date == date(2020, 1, 15)

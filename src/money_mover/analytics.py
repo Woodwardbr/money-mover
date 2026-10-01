@@ -1233,7 +1233,31 @@ def sector_options() -> list[str]:
 # --- Debt Tracker: manually-tracked loans -----------------------------------
 
 
+def roll_due_date_forward(due: date, today: date) -> date:
+    """Advance a monthly due date by whole months until it is on or after ``today``.
+
+    Keeps the original day of month, clamped to short months (Jan 31 -> Feb 28
+    -> Mar 31).
+    """
+    months = 0
+    rolled = due
+    while rolled < today:
+        months += 1
+        total = due.month - 1 + months
+        year, month = due.year + total // 12, total % 12 + 1
+        rolled = due.replace(
+            year=year, month=month, day=min(due.day, calendar.monthrange(year, month)[1])
+        )
+    return rolled
+
+
 def _row_to_loan(r: sqlite3.Row) -> DebtLoan:
+    next_due = date.fromisoformat(r["next_due_date"]) if r["next_due_date"] else None
+    # Autopay loans are paid on schedule, so a stored due date in the past just
+    # means nobody updated it; show the next occurrence instead. Manual-pay
+    # loans keep the stored date so a missed payment still looks overdue.
+    if next_due is not None and r["auto_pay"]:
+        next_due = roll_due_date_forward(next_due, date.today())
     return DebtLoan(
         loan_id=r["loan_id"],
         name=r["name"],
@@ -1241,7 +1265,7 @@ def _row_to_loan(r: sqlite3.Row) -> DebtLoan:
         interest_rate=r["interest_rate"],
         min_payment=r["min_payment"],
         current_balance=r["current_balance"],
-        next_due_date=date.fromisoformat(r["next_due_date"]) if r["next_due_date"] else None,
+        next_due_date=next_due,
         auto_pay=bool(r["auto_pay"]),
         status=r["status"],
         notes=r["notes"],

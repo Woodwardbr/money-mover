@@ -212,3 +212,28 @@ def test_record_payment_to_card_not_stored(client, make_account):
     )
     assert resp.json()["stored"] is False
     assert loan_payments() == []
+
+
+def test_record_payment_refuses_autopay_loan(client, make_account):
+    make_account("aid", kind="loan")
+    with get_conn() as conn:
+        conn.execute("INSERT INTO loans (loan_id, name, auto_pay) VALUES ('l1', 'Direct', 1)")
+    resp = client.post(
+        "/api/muse/record-payment",
+        json={"account_id": "aid", "amount": 120, "loan_id": "l1"},
+        headers=AUTH,
+    )
+    assert resp.status_code == 409
+    assert loan_payments() == []
+
+
+def test_record_payment_refuses_combined_when_all_loans_autopay(client, make_account):
+    make_account("aid", kind="loan")
+    with get_conn() as conn:
+        conn.execute("INSERT INTO loans (loan_id, name, auto_pay) VALUES ('l1', 'A', 1)")
+        conn.execute("INSERT INTO loans (loan_id, name, auto_pay) VALUES ('l2', 'B', 1)")
+    resp = client.post(
+        "/api/muse/record-payment", json={"account_id": "aid", "amount": 300}, headers=AUTH
+    )
+    assert resp.status_code == 409
+    assert loan_payments() == []

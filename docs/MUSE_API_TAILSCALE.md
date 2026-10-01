@@ -58,7 +58,8 @@ All endpoints require header: `X-Muse-Token: <MUSE_API_TOKEN>`
   no `/docs` or OpenAPI schema). Everything else answers 404.
 - Tailscale ACLs: optionally restrict port 8001 on this machine to Muse's device only.
 - The only write is `record-payment`, which adds a local `loan_payments` row; nothing moves money.
-- `record-payment` stores a `loan_payments` row when `loan_id` is given, or as a combined payment across all loans when the account is a Plaid loan account (e.g. Aidvantage). Otherwise it returns `"stored": false` (card payments arrive via Plaid sync).
+- `record-payment` stores a `loan_payments` row when `loan_id` is given, or as a combined payment across all loans when the account is a Plaid loan account (e.g. Aidvantage). Otherwise it returns `"stored": false` (card payments arrive via Plaid sync). Loans on autopay are refused with `409`: you log those payments yourself, so a Muse entry would be a duplicate.
+- Tracked loans on autopay show their next due date even if the stored one has passed (it is advanced month by month when read). Manual-pay loans keep the stored date, so a missed payment still shows as overdue.
 - `payoff-balances` works without Plaid Liabilities: cards fall back to their current balance. Liabilities only adds statement balances, due dates and minimums. New links request it automatically; existing items would need re-linking to get it. Unexpected Plaid failures (e.g. `ITEM_LOGIN_REQUIRED`) are listed under `errors`, and the affected cards still appear with their current balance.
 
 ## For Muse's payoff workflow
