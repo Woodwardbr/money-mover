@@ -2,7 +2,7 @@
 
 This exposes a minimal, token-authenticated API for Muse's monthly payoff workflow.
 
-The Muse API runs as a **separate listener** that serves only the four
+The Muse API runs as a **separate listener** that serves only the
 `/api/muse/*` routes below. The dashboard and the rest of `/api` stay on
 `127.0.0.1`, so Muse cannot reach them even with a valid token. To give Muse a
 new capability, add a route to `muse_api.py`; nothing else is exposed.
@@ -13,6 +13,7 @@ new capability, add a route to `muse_api.py`; nothing else is exposed.
 - `GET /api/muse/payoff-balances` — what to pay on each credit card (`payoff_amount`), plus the Debt Tracker's loans (`tracked_loans`: monthly payment, due date, `auto_pay`, `loan_id`). A card's `balance_source` is `"statement"` when Plaid Liabilities is available for it, otherwise `"current"` (balance from the last sync; no due date or minimum payment)
 - `GET /api/muse/spending-summary?period=YYYY-MM` — budgets vs actuals + average monthly spending
 - `POST /api/muse/record-payment` — record a payoff payment: `{"account_id": "...", "amount": 123.45, "payment_date": "2026-10-01"}`, optionally with `"loan_id"` to target one tracked loan
+- `POST /api/muse/update-loans` — update tracked loans from Aidvantage: `{"updates": [{"loan_id": "...", "current_balance": 4950.12, "min_payment": 55.98, "next_due_date": "2026-11-15", "interest_rate": 5.5, "status": "Scheduled"}]}`. Every field except `loan_id` is optional; only fields sent change. Returns the updated loans
 
 All endpoints require header: `X-Muse-Token: <MUSE_API_TOKEN>`
 
@@ -57,7 +58,13 @@ All endpoints require header: `X-Muse-Token: <MUSE_API_TOKEN>`
 - Muse's listener serves only `/api/muse/*` (no dashboard, no other `/api` routes,
   no `/docs` or OpenAPI schema). Everything else answers 404.
 - Tailscale ACLs: optionally restrict port 8001 on this machine to Muse's device only.
-- The only write is `record-payment`, which adds a local `loan_payments` row; nothing moves money.
+- Muse can write two things, both local only (nothing moves money):
+  - `record-payment` adds a `loan_payments` row.
+  - `update-loans` changes balance, monthly payment, due date, interest rate or status on
+    **existing** loans. It cannot create, delete or rename loans, or change autopay. Unknown
+    fields are rejected, values are validated, and a batch applies entirely or not at all
+    (unknown `loan_id` → 404, nothing written). Balance changes are snapshotted for the
+    balance-history chart, same as editing in the Debt Tracker. Each call is logged.
 - `record-payment` stores a `loan_payments` row when `loan_id` is given, or as a combined payment across all loans when the account is a Plaid loan account (e.g. Aidvantage). Otherwise it returns `"stored": false` (card payments arrive via Plaid sync). Loans on autopay are refused with `409`: you log those payments yourself, so a Muse entry would be a duplicate.
 - Tracked loans on autopay show their next due date even if the stored one has passed (it is advanced month by month when read). Manual-pay loans keep the stored date, so a missed payment still shows as overdue.
 - `payoff-balances` works without Plaid Liabilities: cards fall back to their current balance. Liabilities only adds statement balances, due dates and minimums. New links request it automatically; existing items would need re-linking to get it. Unexpected Plaid failures (e.g. `ITEM_LOGIN_REQUIRED`) are listed under `errors`, and the affected cards still appear with their current balance.
@@ -70,3 +77,4 @@ Muse will:
 3. Present plan for manual approval in chat
 4. After approval, guide payments via browser (or you pay manually)
 5. `POST /api/muse/record-payment` for each payment + remind you to Sync in money-mover UI
+6. After checking Aidvantage, `POST /api/muse/update-loans` with the current balances and next payment

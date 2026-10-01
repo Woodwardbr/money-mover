@@ -1332,16 +1332,65 @@ def upsert_loan(
         # Record a balance snapshot whenever the balance actually moves.
         # Skip when current_balance is NULL (user hasn't entered it yet).
         if current_balance is not None and current_balance != prev_balance:
-            today = date.today().isoformat()
-            conn.execute(
-                """
-                INSERT INTO loan_balance_snapshots (loan_id, snapshot_date, balance)
-                VALUES (?, ?, ?)
-                ON CONFLICT(loan_id, snapshot_date) DO UPDATE SET balance=excluded.balance
-                """,
-                (loan_id, today, current_balance),
-            )
+            _snapshot_loan_balance(conn, loan_id, current_balance)
     return loan_id
+
+
+def _snapshot_loan_balance(conn: sqlite3.Connection, loan_id: str, balance: float) -> None:
+    conn.execute(
+        """
+        INSERT INTO loan_balance_snapshots (loan_id, snapshot_date, balance)
+        VALUES (?, ?, ?)
+        ON CONFLICT(loan_id, snapshot_date) DO UPDATE SET balance=excluded.balance
+        """,
+        (loan_id, date.today().isoformat(), balance),
+    )
+
+
+# Columns update_loans() may change; anything else is rejected.
+LOAN_UPDATABLE_FIELDS = frozenset(
+    {"current_balance", "min_payment", "next_due_date", "interest_rate", "status"}
+)
+
+
+def update_loans(updates: list[tuple[str, dict]]) -> list[DebtLoan]:
+    """Apply partial updates to existing loans in one transaction.
+
+    Each update is ``(loan_id, {column: value})`` with columns from
+    ``LOAN_UPDATABLE_FIELDS``. Only the given columns change. A balance change
+    is snapshotted like an edit in the Debt Tracker. Raises ``LookupError`` for
+    an unknown loan_id, in which case nothing is written.
+    """
+    with get_conn() as conn:
+        for loan_id, fields in updates:
+            unknown = set(fields) - LOAN_UPDATABLE_FIELDS
+            if unknown:
+                raise ValueError(f"Not updatable: {sorted(unknown)}")
+            prev = conn.execute(
+                "SELECT current_balance FROM loans WHERE loan_id = ?", (loan_id,)
+            ).fetchone()
+            if prev is None:
+                raise LookupError(loan_id)
+            if not fields:
+                continue
+            values = {
+                k: v.isoformat() if isinstance(v, date) else v for k, v in fields.items()
+            }
+            # Column names come from LOAN_UPDATABLE_FIELDS, never from input.
+            assignments = ", ".join(f"{col}=?" for col in values)
+            conn.execute(
+                f"UPDATE loans SET {assignments}, updated_at=datetime('now') WHERE loan_id=?",
+                (*values.values(), loan_id),
+            )
+            balance = fields.get("current_balance")
+            if balance is not None and balance != prev["current_balance"]:
+                _snapshot_loan_balance(conn, loan_id, balance)
+        ids = [loan_id for loan_id, _ in updates]
+        rows = conn.execute(
+            f"SELECT * FROM loans WHERE loan_id IN ({', '.join('?' * len(ids))})", ids
+        ).fetchall()
+    by_id = {r["loan_id"]: _row_to_loan(r) for r in rows}
+    return [by_id[loan_id] for loan_id in ids]
 
 
 def delete_loan(loan_id: str) -> None:

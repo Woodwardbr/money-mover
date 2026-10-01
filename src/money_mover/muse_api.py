@@ -14,9 +14,10 @@ import logging
 import re
 import secrets
 from datetime import date, timedelta
+from typing import Literal
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from . import analytics, plaid
 from .config import settings
@@ -47,6 +48,38 @@ class RecordPaymentReq(BaseModel):
     payment_date: date | None = None
     loan_id: str | None = None
     notes: str | None = None
+
+
+class LoanUpdate(BaseModel):
+    """Partial update to a tracked loan. Only fields that are sent change."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    loan_id: str = Field(min_length=1)
+    current_balance: float | None = Field(default=None, ge=0)
+    min_payment: float | None = Field(default=None, ge=0)
+    next_due_date: date | None = None
+    interest_rate: float | None = Field(default=None, ge=0, le=100)
+    status: Literal["Scheduled", "Paid", "Past Due"] | None = None
+
+    @model_validator(mode="after")
+    def _sent_fields_not_null(self) -> LoanUpdate:
+        fields = self.model_fields_set - {"loan_id"}
+        if not fields:
+            raise ValueError("at least one field to update is required")
+        nulls = sorted(f for f in fields if getattr(self, f) is None)
+        if nulls:
+            raise ValueError(f"fields cannot be null: {nulls}")
+        return self
+
+    def changes(self) -> dict:
+        return {f: getattr(self, f) for f in self.model_fields_set - {"loan_id"}}
+
+
+class UpdateLoansReq(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    updates: list[LoanUpdate] = Field(min_length=1, max_length=50)
 
 
 @router.get("/health")
@@ -166,25 +199,26 @@ def payoff_balances() -> dict:
             }
         )
 
-    tracked_loans = [
-        {
-            "loan_id": ln.loan_id,
-            "name": ln.name,
-            "monthly_payment": ln.min_payment,
-            "next_due_date": ln.next_due_date.isoformat() if ln.next_due_date else None,
-            "current_balance": ln.current_balance,
-            "interest_rate": ln.interest_rate,
-            "auto_pay": ln.auto_pay,
-            "status": ln.status,
-        }
-        for ln in analytics.list_loans()
-    ]
+    tracked_loans = [_loan_dict(ln) for ln in analytics.list_loans()]
 
     return {
         "credit_cards": credit_cards,
         "student_loans": student_loans,
         "tracked_loans": tracked_loans,
         "errors": errors,
+    }
+
+
+def _loan_dict(ln) -> dict:
+    return {
+        "loan_id": ln.loan_id,
+        "name": ln.name,
+        "monthly_payment": ln.min_payment,
+        "next_due_date": ln.next_due_date.isoformat() if ln.next_due_date else None,
+        "current_balance": ln.current_balance,
+        "interest_rate": ln.interest_rate,
+        "auto_pay": ln.auto_pay,
+        "status": ln.status,
     }
 
 
@@ -277,3 +311,26 @@ def record_payment(payload: RecordPaymentReq) -> dict:
 # No interactive docs/OpenAPI schema: Muse gets exactly the routes above.
 muse_app = FastAPI(title="Money Mover — Muse", docs_url=None, redoc_url=None, openapi_url=None)
 muse_app.include_router(router)
+
+
+@router.post("/update-loans")
+def update_loans(payload: UpdateLoansReq) -> dict:
+    """Update balance, payment, due date, rate or status on existing tracked loans.
+
+    Only fields that are sent change. All updates apply or none do: an unknown
+    ``loan_id`` returns 404 and nothing is written. Loans cannot be created,
+    deleted or renamed, and ``auto_pay`` cannot be changed, through this API.
+    Returns the updated loans in request order.
+    """
+    ids = [u.loan_id for u in payload.updates]
+    if len(set(ids)) != len(ids):
+        raise HTTPException(status_code=400, detail="Each loan_id may appear only once")
+    try:
+        loans = analytics.update_loans([(u.loan_id, u.changes()) for u in payload.updates])
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown loan_id: {exc.args[0]}") from exc
+    log.info(
+        "Muse updated loans: %s",
+        ", ".join(f"{u.loan_id}={sorted(u.changes())}" for u in payload.updates),
+    )
+    return {"loans": [_loan_dict(ln) for ln in loans]}
