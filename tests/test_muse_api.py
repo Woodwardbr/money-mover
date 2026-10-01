@@ -237,3 +237,93 @@ def test_record_payment_refuses_combined_when_all_loans_autopay(client, make_acc
     )
     assert resp.status_code == 409
     assert loan_payments() == []
+
+
+def loan_row(loan_id: str) -> dict:
+    with get_conn() as conn:
+        return dict(conn.execute("SELECT * FROM loans WHERE loan_id = ?", (loan_id,)).fetchone())
+
+
+def snapshots(loan_id: str) -> list[float]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT balance FROM loan_balance_snapshots WHERE loan_id = ?", (loan_id,)
+        ).fetchall()
+    return [r["balance"] for r in rows]
+
+
+@pytest.fixture
+def two_loans():
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO loans (loan_id, name, current_balance, min_payment, next_due_date, "
+            "interest_rate, auto_pay, notes) VALUES "
+            "('l1', 'Loan 1', 5000, 50, '2026-10-15', 5.5, 1, 'keep me'), "
+            "('l2', 'Loan 2', 8000, 80, '2026-10-15', 6.5, 1, NULL)"
+        )
+
+
+def test_update_loans_changes_only_sent_fields(client, two_loans):
+    resp = client.post(
+        "/api/muse/update-loans",
+        json={"updates": [
+            {"loan_id": "l1", "current_balance": 4950.12, "next_due_date": "2026-11-15"},
+            {"loan_id": "l2", "min_payment": 81.25},
+        ]},
+        headers=AUTH,
+    )
+    assert resp.status_code == 200
+    assert [ln["loan_id"] for ln in resp.json()["loans"]] == ["l1", "l2"]
+
+    l1, l2 = loan_row("l1"), loan_row("l2")
+    assert (l1["current_balance"], l1["next_due_date"]) == (4950.12, "2026-11-15")
+    assert (l1["min_payment"], l1["interest_rate"], l1["notes"]) == (50, 5.5, "keep me")
+    assert (l2["min_payment"], l2["current_balance"]) == (81.25, 8000)
+    assert snapshots("l1") == [4950.12]
+    assert snapshots("l2") == []
+
+
+def test_update_loans_is_all_or_nothing(client, two_loans):
+    resp = client.post(
+        "/api/muse/update-loans",
+        json={"updates": [
+            {"loan_id": "l1", "current_balance": 1.0},
+            {"loan_id": "missing", "current_balance": 2.0},
+        ]},
+        headers=AUTH,
+    )
+    assert resp.status_code == 404
+    assert loan_row("l1")["current_balance"] == 5000
+    assert snapshots("l1") == []
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"loan_id": "l1"},                                   # nothing to update
+        {"loan_id": "l1", "current_balance": None},          # explicit null
+        {"loan_id": "l1", "current_balance": -1},
+        {"loan_id": "l1", "interest_rate": 101},
+        {"loan_id": "l1", "next_due_date": "2026-02-30"},
+        {"loan_id": "l1", "status": "Closed"},
+        {"loan_id": "l1", "auto_pay": False},                # not updatable
+        {"loan_id": "l1", "name": "Renamed"},                # not updatable
+    ],
+)
+def test_update_loans_rejects_invalid(client, two_loans, update):
+    resp = client.post("/api/muse/update-loans", json={"updates": [update]}, headers=AUTH)
+    assert resp.status_code == 422
+    assert loan_row("l1")["current_balance"] == 5000
+
+
+def test_update_loans_rejects_duplicates_and_empty(client, two_loans):
+    dup = {"updates": [{"loan_id": "l1", "min_payment": 1}, {"loan_id": "l1", "min_payment": 2}]}
+    assert client.post("/api/muse/update-loans", json=dup, headers=AUTH).status_code == 400
+    empty = {"updates": []}
+    assert client.post("/api/muse/update-loans", json=empty, headers=AUTH).status_code == 422
+    assert loan_row("l1")["min_payment"] == 50
+
+
+def test_update_loans_requires_token(client, two_loans):
+    body = {"updates": [{"loan_id": "l1", "min_payment": 1}]}
+    assert client.post("/api/muse/update-loans", json=body).status_code == 401
