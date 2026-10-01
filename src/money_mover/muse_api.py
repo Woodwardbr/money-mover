@@ -54,17 +54,42 @@ def muse_health() -> dict:
     return {"status": "ok", "plaid_env": settings.plaid_env_value}
 
 
+# Plaid errors meaning "this item has no liabilities data" rather than "something
+# broke". Cards on these items fall back to their synced current balance.
+_NO_LIABILITIES_CODES = {"ADDITIONAL_CONSENT_REQUIRED", "PRODUCTS_NOT_SUPPORTED"}
+
+
 @router.get("/payoff-balances")
 def payoff_balances() -> dict:
-    """Return statement balances for the payoff workflow.
+    """Return what to pay for the payoff workflow.
 
-    Credit cards: last statement balance, minimum payment, due date.
-    Student loans: next monthly payment + due date.
+    Credit cards: one entry per card. ``payoff_amount`` is the last statement
+    balance when Plaid Liabilities is available for the card
+    (``balance_source: "statement"``), otherwise the current balance from the
+    last sync (``balance_source: "current"``). Due date and minimum payment
+    are only known with Liabilities.
 
-    Items whose liabilities lookup fails are listed under ``errors`` rather than
-    dropped, so a missing card is never mistaken for a zero balance.
+    Student loans: Plaid Liabilities data, when any linked item has it.
+    Tracked loans: the Debt Tracker's loans, with monthly payment, due date
+    and ``auto_pay``. Their ``loan_id`` can be passed to ``record-payment``.
+
+    Unexpected Plaid failures are listed under ``errors``; the affected cards
+    still appear with their current balance, so a card is never silently
+    dropped or mistaken for a zero balance.
     """
     with get_conn() as conn:
+        cards = conn.execute(
+            analytics.LATEST_BALANCES_CTE
+            + """
+            SELECT a.account_id, a.name, a.mask, a.item_id, i.institution,
+                   lb.current AS current_balance, lb.snapshot_date AS balance_as_of
+            FROM accounts a
+            JOIN items i ON i.item_id = a.item_id
+            LEFT JOIN latest_balances lb ON lb.account_id = a.account_id
+            WHERE a.kind = 'credit'
+            ORDER BY i.institution, a.name
+            """
+        ).fetchall()
         # Only items holding credit/loan accounts can have liabilities; querying
         # brokerage-only items would fail every time and bury real errors.
         items = conn.execute(
@@ -74,46 +99,34 @@ def payoff_balances() -> dict:
             WHERE a.kind IN ('credit', 'loan')
             """
         ).fetchall()
-        accounts = {
-            r["account_id"]: dict(r) for r in conn.execute("SELECT * FROM accounts").fetchall()
+        account_names = {
+            r["account_id"]: r for r in conn.execute("SELECT account_id, name, mask FROM accounts")
         }
 
-    credit_cards: list[dict] = []
+    credit_liabs: dict[str, plaid.CreditLiability] = {}
     student_loans: list[dict] = []
     errors: list[dict] = []
 
     for item in items:
         try:
-            credit_liabs, student_liabs = plaid.get_liabilities(item["access_token"])
+            credit, student = plaid.get_liabilities(item["access_token"])
         except Exception as exc:
-            log.warning("Liabilities fetch failed for %s: %s", item["institution"], exc)
-            errors.append({"institution": item["institution"], "error": str(exc)})
+            code = plaid.error_code(exc)
+            if code not in _NO_LIABILITIES_CODES:
+                log.warning("Liabilities fetch failed for %s: %s", item["institution"], exc)
+                errors.append(
+                    {"institution": item["institution"], "error_code": code or type(exc).__name__}
+                )
             continue
 
-        for c in credit_liabs:
-            acct = accounts.get(c.account_id, {})
-            credit_cards.append(
-                {
-                    "account_id": c.account_id,
-                    "name": acct.get("name"),
-                    "mask": acct.get("mask"),
-                    "institution": item["institution"],
-                    "statement_balance": c.last_statement_balance,
-                    "statement_issue_date": c.last_statement_issue_date,
-                    "minimum_payment": c.minimum_payment_amount,
-                    "due_date": c.next_payment_due_date,
-                    "last_payment_amount": c.last_payment_amount,
-                    "last_payment_date": c.last_payment_date,
-                }
-            )
-
-        for s in student_liabs:
-            acct = accounts.get(s.account_id, {})
+        credit_liabs.update((c.account_id, c) for c in credit)
+        for s in student:
+            acct = account_names.get(s.account_id)
             student_loans.append(
                 {
                     "account_id": s.account_id,
-                    "name": acct.get("name"),
-                    "mask": acct.get("mask"),
+                    "name": acct["name"] if acct else None,
+                    "mask": acct["mask"] if acct else None,
                     "institution": item["institution"],
                     "loan_name": s.loan_name,
                     "monthly_payment_due": s.next_monthly_payment,
@@ -124,7 +137,55 @@ def payoff_balances() -> dict:
                 }
             )
 
-    return {"credit_cards": credit_cards, "student_loans": student_loans, "errors": errors}
+    credit_cards = []
+    for card in cards:
+        liab = credit_liabs.get(card["account_id"])
+        statement = liab.last_statement_balance if liab else None
+        if statement is not None:
+            payoff, source = statement, "statement"
+        elif card["current_balance"] is not None:
+            payoff, source = card["current_balance"], "current"
+        else:
+            payoff, source = None, None
+        credit_cards.append(
+            {
+                "account_id": card["account_id"],
+                "name": card["name"],
+                "mask": card["mask"],
+                "institution": card["institution"],
+                "payoff_amount": payoff,
+                "balance_source": source,
+                "statement_balance": statement,
+                "current_balance": card["current_balance"],
+                "balance_as_of": card["balance_as_of"],
+                "statement_issue_date": liab.last_statement_issue_date if liab else None,
+                "minimum_payment": liab.minimum_payment_amount if liab else None,
+                "due_date": liab.next_payment_due_date if liab else None,
+                "last_payment_amount": liab.last_payment_amount if liab else None,
+                "last_payment_date": liab.last_payment_date if liab else None,
+            }
+        )
+
+    tracked_loans = [
+        {
+            "loan_id": ln.loan_id,
+            "name": ln.name,
+            "monthly_payment": ln.min_payment,
+            "next_due_date": ln.next_due_date.isoformat() if ln.next_due_date else None,
+            "current_balance": ln.current_balance,
+            "interest_rate": ln.interest_rate,
+            "auto_pay": ln.auto_pay,
+            "status": ln.status,
+        }
+        for ln in analytics.list_loans()
+    ]
+
+    return {
+        "credit_cards": credit_cards,
+        "student_loans": student_loans,
+        "tracked_loans": tracked_loans,
+        "errors": errors,
+    }
 
 
 @router.get("/spending-summary")

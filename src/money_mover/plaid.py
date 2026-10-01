@@ -6,6 +6,7 @@ SDK's request/response shapes. All calls return plain dicts/dataclasses.
 from __future__ import annotations
 
 import functools
+import json
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -352,3 +353,13 @@ def get_liabilities(access_token: str) -> tuple[list[CreditLiability], list[Stud
         for s in liabilities.get("student", []) or []
     ]
     return credit_out, student_out
+
+
+def error_code(exc: Exception) -> str | None:
+    """Plaid's ``error_code`` (e.g. ``ADDITIONAL_CONSENT_REQUIRED``) from an API error."""
+    if not isinstance(exc, plaid.ApiException) or not exc.body:
+        return None
+    try:
+        return json.loads(exc.body).get("error_code")
+    except (ValueError, AttributeError):
+        return None

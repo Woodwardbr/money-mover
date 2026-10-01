@@ -10,7 +10,7 @@ new capability, add a route to `muse_api.py`; nothing else is exposed.
 ## What it does
 
 - `GET /api/muse/health` — health check
-- `GET /api/muse/payoff-balances` — statement balances for credit cards + monthly payment due for student loans (via Plaid Liabilities)
+- `GET /api/muse/payoff-balances` — what to pay on each credit card (`payoff_amount`), plus the Debt Tracker's loans (`tracked_loans`: monthly payment, due date, `auto_pay`, `loan_id`). A card's `balance_source` is `"statement"` when Plaid Liabilities is available for it, otherwise `"current"` (balance from the last sync; no due date or minimum payment)
 - `GET /api/muse/spending-summary?period=YYYY-MM` — budgets vs actuals + average monthly spending
 - `POST /api/muse/record-payment` — record a payoff payment: `{"account_id": "...", "amount": 123.45, "payment_date": "2026-10-01"}`, optionally with `"loan_id"` to target one tracked loan
 
@@ -59,12 +59,12 @@ All endpoints require header: `X-Muse-Token: <MUSE_API_TOKEN>`
 - Tailscale ACLs: optionally restrict port 8001 on this machine to Muse's device only.
 - The only write is `record-payment`, which adds a local `loan_payments` row; nothing moves money.
 - `record-payment` stores a `loan_payments` row when `loan_id` is given, or as a combined payment across all loans when the account is a Plaid loan account (e.g. Aidvantage). Otherwise it returns `"stored": false` (card payments arrive via Plaid sync).
-- `payoff-balances` only queries institutions with credit or loan accounts, and reports per-institution Plaid failures under `errors` instead of omitting them. Liabilities must be enabled on your Plaid account. New links request it automatically; items linked before this change need re-linking.
+- `payoff-balances` works without Plaid Liabilities: cards fall back to their current balance. Liabilities only adds statement balances, due dates and minimums. New links request it automatically; existing items would need re-linking to get it. Unexpected Plaid failures (e.g. `ITEM_LOGIN_REQUIRED`) are listed under `errors`, and the affected cards still appear with their current balance.
 
 ## For Muse's payoff workflow
 
 Muse will:
-1. `GET /api/muse/payoff-balances` → build payment plan (full statement balances for cards, monthly payment due for Aidvantage)
+1. `GET /api/muse/payoff-balances` → build payment plan (`payoff_amount` for each card; skip tracked loans with `auto_pay: true`)
 2. `GET /api/muse/spending-summary` → flag significant/unusual expenses vs budget/average
 3. Present plan for manual approval in chat
 4. After approval, guide payments via browser (or you pay manually)
