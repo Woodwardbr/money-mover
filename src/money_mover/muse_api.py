@@ -41,6 +41,7 @@ class RecordPaymentReq(BaseModel):
     account_id: str = Field(min_length=1)
     amount: float = Field(gt=0)
     payment_date: date | None = None
+    loan_id: str | None = None
     notes: str | None = None
 
 
@@ -60,7 +61,15 @@ def payoff_balances() -> dict:
     dropped, so a missing card is never mistaken for a zero balance.
     """
     with get_conn() as conn:
-        items = conn.execute("SELECT item_id, access_token, institution FROM items").fetchall()
+        # Only items holding credit/loan accounts can have liabilities; querying
+        # brokerage-only items would fail every time and bury real errors.
+        items = conn.execute(
+            """
+            SELECT DISTINCT i.item_id, i.access_token, i.institution
+            FROM items i JOIN accounts a ON a.item_id = i.item_id
+            WHERE a.kind IN ('credit', 'loan')
+            """
+        ).fetchall()
         accounts = {
             r["account_id"]: dict(r) for r in conn.execute("SELECT * FROM accounts").fetchall()
         }
@@ -146,31 +155,37 @@ def spending_summary(period: str | None = None) -> dict:
 def record_payment(payload: RecordPaymentReq) -> dict:
     """Record a manual payoff payment so it shows in money-mover.
 
-    If the account matches a tracked loan (by name), a loan_payments row is
-    written. Otherwise nothing is stored (card payments arrive via Plaid sync)
-    and the response says so with ``"stored": false``.
+    With ``loan_id``, the payment is logged against that tracked loan. Without
+    it, a payment to a Plaid loan account (e.g. Aidvantage) is logged as a
+    combined payment across all loans (``loan_id`` NULL). Payments to other
+    accounts are not stored (card payments arrive via Plaid sync) and the
+    response says so with ``"stored": false``. The loan's balance is not
+    updated; that happens when the user edits it in the Debt Tracker.
     """
     with get_conn() as conn:
         acct = conn.execute(
-            "SELECT name FROM accounts WHERE account_id = ?", (payload.account_id,)
+            "SELECT name, kind FROM accounts WHERE account_id = ?", (payload.account_id,)
         ).fetchone()
-    if acct is None:
-        raise HTTPException(status_code=404, detail="Unknown account_id")
+        if acct is None:
+            raise HTTPException(status_code=404, detail="Unknown account_id")
+        loan_name: str | None = None
+        if payload.loan_id is not None:
+            loan = conn.execute(
+                "SELECT name FROM loans WHERE loan_id = ?", (payload.loan_id,)
+            ).fetchone()
+            if loan is None:
+                raise HTTPException(status_code=404, detail="Unknown loan_id")
+            loan_name = loan["name"]
 
-    acct_name = (acct["name"] or "").lower()
-    loan = next(
-        (ln for ln in analytics.list_loans() if ln.name and ln.name.lower() in acct_name),
-        None,
-    )
-    if loan is None:
+    if payload.loan_id is None and acct["kind"] != "loan":
         return {"status": "noted", "stored": False, "account": acct["name"]}
 
     payment_id = analytics.record_loan_payment(
         payment_date=payload.payment_date or date.today(),
         amount=payload.amount,
-        loan_id=loan.loan_id,
+        loan_id=payload.loan_id,
         status="Received",
-        source="Muse payoff",
+        source=f"Muse payoff ({acct['name']})",
         notes=payload.notes or "Muse monthly payoff",
     )
-    return {"status": "recorded", "stored": True, "payment_id": payment_id, "loan": loan.name}
+    return {"status": "recorded", "stored": True, "payment_id": payment_id, "loan": loan_name}

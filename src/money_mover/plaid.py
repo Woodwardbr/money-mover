@@ -191,6 +191,8 @@ def create_link_token() -> str:
         user=LinkTokenCreateRequestUser(client_user_id="money-mover-user"),
         client_name="Money Mover",
         products=[Products("transactions"), Products("investments")],
+        # Needed by the Muse payoff API (statement balances, loan payments due).
+        optional_products=[Products("liabilities")],
         country_codes=[CountryCode("US")],
         language="en",
     )
